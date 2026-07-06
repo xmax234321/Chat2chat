@@ -55,7 +55,7 @@ describe('state-storage PIN lock', () => {
           id: 'm1',
           contactId: 'c1',
           timestamp: 1,
-          outgoing: true,
+          direction: 'out',
           content: { kind: 'text', body: 'secret' },
         },
       ],
@@ -140,9 +140,6 @@ describe('state-storage security', () => {
     assert.equal(localStorageMock.getItem('chat2chat-device-key'), null);
     assert.equal(localStorageContainsSecrets(mnemonic, messageBody), false);
 
-    for (const key of Object.keys((localStorageMock as { getItem: (k: string) => string | null }).getItem ? {} : {})) {
-      /* iterate via known keys */
-    }
     const meta = localStorageMock.getItem('chat2chat-web-meta');
     if (meta) {
       assert.ok(!meta.includes(mnemonic));
