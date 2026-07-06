@@ -1,0 +1,76 @@
+{
+  "name": "Chat2Chat",
+  "identifier": "com.chat2chat.altstore",
+  "sourceURL": "https://api.chat2chat.org/altstore/source.json",
+  "subtitle": "Private messenger for iOS",
+  "description": "Official Chat2Chat distribution for AltStore. Install the native iOS app without the App Store, get updates from Browse, and refresh every 7 days on your Wi‑Fi with AltServer.",
+  "iconURL": "https://api.chat2chat.org/altstore/icon.png",
+  "headerURL": "https://api.chat2chat.org/altstore/header.png",
+  "website": "https://chat2chat.org",
+  "tintColor": "0B0B0C",
+  "featuredApps": [
+    "com.chat2chat.app"
+  ],
+  "apps": [
+    {
+      "name": "Chat2Chat",
+      "bundleIdentifier": "com.chat2chat.app",
+      "developerName": "Chat2Chat",
+      "subtitle": "End-to-end encrypted · no phone number",
+      "localizedDescription": "Chat2Chat is a private messenger built around encryption — not accounts.\n\n• Encrypted chats with bucket padding (ChainLock v1 optional)\n• No phone number — identity is a key you control\n• Photos, voice notes, files, and PDFs in chat\n• Encrypted backups and desktop pairing over Bluetooth\n• Face ID lock and PIN unlock\n\nLearn more at chat2chat.org",
+      "iconURL": "https://api.chat2chat.org/altstore/icon.png",
+      "tintColor": "0B0B0C",
+      "category": "social",
+      "permissions": [
+        {
+          "type": "camera",
+          "usageDescription": "Scan QR codes and capture photos to send in chat."
+        },
+        {
+          "type": "photos",
+          "usageDescription": "Share images and videos from your library."
+        },
+        {
+          "type": "microphone",
+          "usageDescription": "Record and send voice messages."
+        },
+        {
+          "type": "bluetooth",
+          "usageDescription": "Pair securely with Chat2Chat on your Mac."
+        },
+        {
+          "type": "face-id",
+          "usageDescription": "Unlock Chat2Chat with Face ID."
+        }
+      ],
+      "versions": [
+        {
+          "version": "1.4.1",
+          "buildVersion": "49",
+          "date": "2026-07-04",
+          "localizedDescription": "Deprecated — no longer accepted by relay.",
+          "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.4.1-build49.ipa",
+          "size": 2367136,
+          "sha256": "d988785c993e050a1b82584edb58c1d383b73f45dfc3bb685a35a9c640ae0e22",
+          "minOSVersion": "14.0"
+        }
+      ],
+      "version": "1.4.1",
+      "versionDate": "2026-07-04",
+      "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.4.1-build49.ipa",
+      "size": 2367136
+    }
+  ],
+  "news": [
+    {
+      "title": "What's new in Chat2Chat 1.4.1",
+      "identifier": "chat2chat-1.4.1-build49",
+      "caption": "Deprecated — no longer accepted by relay.",
+      "date": "2026-07-04",
+      "tintColor": "E8A98F",
+      "notify": true,
+      "url": "https://chat2chat.org/download/versions/",
+      "appID": "com.chat2chat.app"
+    }
+  ]
+}
