@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package chainlock.files;
+
+message FileEnvelope {
+  bytes file_id = 1;
+  uint32 chunk_size = 2;
+  uint32 total_chunks = 3;
+  bytes wrapped_file_key = 4;
+  bytes merkle_root = 5;
+  bytes encrypted_filename = 6;
+  bytes encrypted_mime = 7;
+}
+
+message Chunk {
+  uint32 index = 1;
+  bytes nonce = 2;
+  bytes ciphertext = 3;
+  bytes auth_tag = 4;
+}

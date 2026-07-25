@@ -1,0 +1,48 @@
+{
+  "name": "@chat2chat/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chat2Chat desktop app for macOS",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"pnpm --filter @chat2chat/web dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "build:web": "cross-env VITE_ELECTRON=1 VITE_CHAT2CHAT_SERVER=wss://api.chat2chat.org/ws VITE_CHAT2CHAT_HTTP=https://api.chat2chat.org pnpm --filter @chat2chat/web build",
+    "prepare:dist": "node scripts/prepare-dist.mjs",
+    "build": "pnpm build:web && pnpm prepare:dist && electron-builder --mac zip",
+    "build:app": "pnpm build:web && pnpm prepare:dist && electron-builder --mac dir"
+  },
+  "build": {
+    "appId": "com.chat2chat.desktop",
+    "productName": "Chat2Chat",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "web-dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.social-networking",
+      "target": [
+        "dir",
+        "zip"
+      ],
+      "darkModeSupport": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    }
+  },
+  "dependencies": {
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^34.2.0",
+    "electron-builder": "^25.1.8",
+    "wait-on": "^8.0.2"
+  }
+}

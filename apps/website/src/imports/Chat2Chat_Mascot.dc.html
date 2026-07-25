@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#EFEDE7;font-family:'Hanken Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.mono{font-family:'JetBrains Mono',monospace}
+.ink{stroke:#1A1918;fill:none;stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+.ink-thin{stroke:#1A1918;fill:none;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+</style>
+</helmet>
+
+<div style="padding:64px 72px;display:flex;flex-direction:column;gap:52px;width:1180px;box-sizing:border-box">
+
+  <!-- header -->
+  <div>
+    <div class="mono" style="font-size:12px;letter-spacing:.16em;color:#8A867C">CHAT2CHAT · BRAND</div>
+    <div style="font-size:40px;font-weight:600;letter-spacing:-.03em;color:#1A1918;margin-top:14px">Meet Locky — the Chat2Chat mascot</div>
+    <div style="font-size:17px;line-height:1.6;color:#6E6A60;margin-top:12px;max-width:560px">A friendly padlock drawn in a hand-inked, Notion-doodle style. Monoline black on warm paper, one weight, a little wobble — approachable but on-brand for a secure messenger.</div>
+  </div>
+
+  <!-- HERO POSE -->
+  <div style="background:#F6F4EE;border:1px solid #DED9CE;border-radius:24px;padding:44px;display:flex;align-items:center;gap:56px">
+    <div style="flex:none;width:320px;height:340px;display:flex;align-items:center;justify-content:center">
+      <svg viewBox="0 0 260 280" style="width:290px;height:auto;overflow:visible">
+        <!-- ground shadow -->
+        <ellipse cx="130" cy="258" rx="74" ry="11" fill="#1A1918" opacity="0.09"></ellipse>
+        <!-- shackle -->
+        <path class="ink" d="M84 92 V70 a46 46 0 0 1 92 0 V92"></path>
+        <!-- body -->
+        <rect class="ink" x="58" y="92" width="144" height="130" rx="30" fill="#FBFAF6"></rect>
+        <!-- arms -->
+        <path class="ink" d="M58 150 q-26 4 -32 -18"></path>
+        <path class="ink" d="M202 150 q30 -2 30 -34"></path>
+        <!-- little hand wave lines -->
+        <path class="ink-thin" d="M232 112 l7 -9 M239 122 l10 -5 M236 132 l9 1"></path>
+        <!-- legs -->
+        <path class="ink" d="M104 222 V244 M156 222 V244"></path>
+        <path class="ink" d="M92 246 h24 M144 246 h24"></path>
+        <!-- face: eyes -->
+        <circle cx="106" cy="150" r="7.5" fill="#1A1918"></circle>
+        <circle cx="154" cy="150" r="7.5" fill="#1A1918"></circle>
+        <!-- eye sparkles -->
+        <circle cx="109" cy="147" r="2.1" fill="#FBFAF6"></circle>
+        <circle cx="157" cy="147" r="2.1" fill="#FBFAF6"></circle>
+        <!-- blush -->
+        <ellipse cx="86" cy="168" rx="9" ry="5" fill="#E8A98F" opacity="0.55"></ellipse>
+        <ellipse cx="174" cy="168" rx="9" ry="5" fill="#E8A98F" opacity="0.55"></ellipse>
+        <!-- smile -->
+        <path class="ink-thin" d="M116 170 q14 14 28 0"></path>
+        <!-- keyhole belly -->
+        <circle class="ink-thin" cx="130" cy="196" r="9" fill="#FBFAF6"></circle>
+        <path class="ink-thin" d="M130 205 v8"></path>
+      </svg>
+    </div>
+    <div style="flex:1">
+      <div class="mono" style="font-size:12px;letter-spacing:.14em;color:#8A867C">PRIMARY · WAVING</div>
+      <div style="font-size:24px;font-weight:600;color:#1A1918;margin-top:12px;letter-spacing:-.02em">"Your keys, your chats."</div>
+      <div style="font-size:16px;line-height:1.65;color:#6E6A60;margin-top:14px;max-width:440px">Locky's shackle is the classic padlock arch, its belly is a keyhole, and its face carries the whole personality. Use the waving pose for onboarding, empty states, and the install page hero.</div>
+      <div style="display:flex;gap:10px;margin-top:22px">
+        <div style="width:26px;height:26px;border-radius:7px;background:#1A1918;border:1px solid #1A1918"></div>
+        <div style="width:26px;height:26px;border-radius:7px;background:#FBFAF6;border:1px solid #DED9CE"></div>
+        <div style="width:26px;height:26px;border-radius:7px;background:#EFEDE7;border:1px solid #DED9CE"></div>
+        <div style="width:26px;height:26px;border-radius:7px;background:#E8A98F;border:1px solid #DED9CE"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXPRESSION SET -->
+  <div>
+    <div class="mono" style="font-size:12px;letter-spacing:.14em;color:#8A867C;margin-bottom:20px">EXPRESSION SET</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px">
+
+      <!-- happy / locked -->
+      <div style="background:#F6F4EE;border:1px solid #DED9CE;border-radius:20px;padding:26px 20px;display:flex;flex-direction:column;align-items:center;gap:18px">
+        <svg viewBox="0 0 180 210" style="width:140px;height:auto;overflow:visible">
+          <ellipse cx="90" cy="192" rx="50" ry="8" fill="#1A1918" opacity="0.09"></ellipse>
+          <path class="ink" d="M56 70 V52 a34 34 0 0 1 68 0 V70"></path>
+          <rect class="ink" x="38" y="70" width="104" height="98" rx="24" fill="#FBFAF6"></rect>
+          <path class="ink" d="M74 168 V184 M106 168 V184 M64 186 h20 M96 186 h20"></path>
+          <circle cx="74" cy="112" r="6" fill="#1A1918"></circle>
+          <circle cx="106" cy="112" r="6" fill="#1A1918"></circle>
+          <ellipse cx="60" cy="126" rx="7" ry="4" fill="#E8A98F" opacity="0.55"></ellipse>
+          <ellipse cx="120" cy="126" rx="7" ry="4" fill="#E8A98F" opacity="0.55"></ellipse>
+          <path class="ink-thin" d="M80 128 q10 11 20 0"></path>
+          <circle class="ink-thin" cx="90" cy="148" r="7" fill="#FBFAF6"></circle>
+          <path class="ink-thin" d="M90 155 v6"></path>
+        </svg>
+        <div style="font-size:14px;font-weight:600;color:#1A1918">Locked &amp; happy</div>
+      </div>
+
+      <!-- winking -->
+      <div style="background:#F6F4EE;border:1px solid #DED9CE;border-radius:20px;padding:26px 20px;display:flex;flex-direction:column;align-items:center;gap:18px">
+        <svg viewBox="0 0 180 210" style="width:140px;height:auto;overflow:visible">
+          <ellipse cx="90" cy="192" rx="50" ry="8" fill="#1A1918" opacity="0.09"></ellipse>
+          <path class="ink" d="M56 70 V52 a34 34 0 0 1 68 0 V70"></path>
+          <rect class="ink" x="38" y="70" width="104" height="98" rx="24" fill="#FBFAF6"></rect>
+          <path class="ink" d="M74 168 V184 M106 168 V184 M64 186 h20 M96 186 h20"></path>
+          <circle cx="74" cy="112" r="6" fill="#1A1918"></circle>
+          <path class="ink-thin" d="M100 112 q6 -5 12 0"></path>
+          <ellipse cx="60" cy="126" rx="7" ry="4" fill="#E8A98F" opacity="0.55"></ellipse>
+          <ellipse cx="120" cy="126" rx="7" ry="4" fill="#E8A98F" opacity="0.55"></ellipse>
+          <path class="ink-thin" d="M78 130 q12 9 24 -2"></path>
+          <circle class="ink-thin" cx="90" cy="150" r="7" fill="#FBFAF6"></circle>
+          <path class="ink-thin" d="M90 157 v6"></path>
+        </svg>
+        <div style="font-size:14px;font-weight:600;color:#1A1918">Wink</div>
+      </div>
+
+      <!-- sending message -->
+      <div style="background:#F6F4EE;border:1px solid #DED9CE;border-radius:20px;padding:26px 20px;display:flex;flex-direction:column;align-items:center;gap:18px">
+        <svg viewBox="0 0 180 210" style="width:140px;height:auto;overflow:visible">
+          <ellipse cx="90" cy="192" rx="50" ry="8" fill="#1A1918" opacity="0.09"></ellipse>
+          <path class="ink" d="M56 70 V52 a34 34 0 0 1 68 0 V70"></path>
+          <rect class="ink" x="38" y="70" width="104" height="98" rx="24" fill="#FBFAF6"></rect>
+          <path class="ink" d="M74 168 V184 M106 168 V184 M64 186 h20 M96 186 h20"></path>
+          <!-- arm holding bubble -->
+          <path class="ink" d="M142 108 q22 -4 28 -20"></path>
+          <path class="ink-thin" d="M150 66 h30 a6 6 0 0 1 6 6 v14 a6 6 0 0 1 -6 6 h-18 l-8 7 v-7 h-4 a6 6 0 0 1 -6 -6 v-14 a6 6 0 0 1 6 -6 Z" fill="#FBFAF6"></path>
+          <circle cx="158" cy="79" r="2" fill="#1A1918"></circle>
+          <circle cx="167" cy="79" r="2" fill="#1A1918"></circle>
+          <circle cx="176" cy="79" r="2" fill="#1A1918"></circle>
+          <circle cx="74" cy="112" r="6" fill="#1A1918"></circle>
+          <circle cx="106" cy="112" r="6" fill="#1A1918"></circle>
+          <path class="ink-thin" d="M80 128 q10 11 20 0"></path>
+          <circle class="ink-thin" cx="90" cy="148" r="7" fill="#FBFAF6"></circle>
+          <path class="ink-thin" d="M90 155 v6"></path>
+        </svg>
+        <div style="font-size:14px;font-weight:600;color:#1A1918">Sending</div>
+      </div>
+
+      <!-- sleeping / locked away -->
+      <div style="background:#F6F4EE;border:1px solid #DED9CE;border-radius:20px;padding:26px 20px;display:flex;flex-direction:column;align-items:center;gap:18px">
+        <svg viewBox="0 0 180 210" style="width:140px;height:auto;overflow:visible">
+          <ellipse cx="90" cy="192" rx="50" ry="8" fill="#1A1918" opacity="0.09"></ellipse>
+          <path class="ink" d="M56 70 V52 a34 34 0 0 1 68 0 V70"></path>
+          <rect class="ink" x="38" y="70" width="104" height="98" rx="24" fill="#FBFAF6"></rect>
+          <path class="ink" d="M74 168 V184 M106 168 V184 M64 186 h20 M96 186 h20"></path>
+          <path class="ink-thin" d="M66 112 q8 6 16 0"></path>
+          <path class="ink-thin" d="M98 112 q8 6 16 0"></path>
+          <path class="ink-thin" d="M82 132 q8 5 16 0"></path>
+          <path class="ink-thin" d="M120 96 l12 0 -12 12 12 0" stroke-width="3.5"></path>
+          <path class="ink-thin" d="M138 78 l9 0 -9 9 9 0" stroke-width="3"></path>
+          <circle class="ink-thin" cx="90" cy="150" r="7" fill="#FBFAF6"></circle>
+          <path class="ink-thin" d="M90 157 v6"></path>
+        </svg>
+        <div style="font-size:14px;font-weight:600;color:#1A1918">Asleep</div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1180,&quot;height&quot;:900}}"></script>
+</body>
+</html>

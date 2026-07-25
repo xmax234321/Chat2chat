@@ -1,0 +1,26 @@
+# DEPRECATED: IP-only relay without TLS. Do not use in production — old clients can connect over plain HTTP.
+# Prefer deploy/regru/docker-compose.relay-only.yml with DOMAIN=api.chat2chat.org (HTTPS/WSS only).
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: apps/server/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3847:3847"
+    environment:
+      PORT: 3847
+      HOST: 0.0.0.0
+      CORS_ORIGIN: "true"
+      MESSAGE_TTL_MS: 86400000
+      BLOB_TTL_MS: 86400000
+      MAX_BLOB_SIZE: ${MAX_BLOB_SIZE:-536870912}
+      MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-1.4.2}
+      MIN_CLIENT_BUILD: ${MIN_CLIENT_BUILD:-50}
+      ENFORCE_MIN_CLIENT_VERSION: ${ENFORCE_MIN_CLIENT_VERSION:-true}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3847/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

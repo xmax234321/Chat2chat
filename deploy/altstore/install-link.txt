@@ -1,0 +1,5 @@
+# Open on iPhone (with AltStore installed):
+altstore://install?url=https%3A%2F%2Fapi.chat2chat.org%2Faltstore%2FChat2Chat-1.5.2-build54.ipa
+
+# Or add source in AltStore → Sources → + :
+https://api.chat2chat.org/altstore/source.json

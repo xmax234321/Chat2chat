@@ -137,7 +137,7 @@ async function ensureAltStoreAssets(iconURL, headerURL) {
       <circle cx="24" cy="28" r="3.1" fill="#F4F4F3"/>
     </g>
     <text x="0" y="196" fill="#F4F4F3" font-family="system-ui, -apple-system, sans-serif" font-size="72" font-weight="600" letter-spacing="-2">Chat2Chat</text>
-    <text x="2" y="252" fill="#9C9C9A" font-family="system-ui, -apple-system, sans-serif" font-size="30" font-weight="500">Private by design.</text>
+    <text x="2" y="252" fill="#9C9C9A" font-family="system-ui, -apple-system, sans-serif" font-size="30" font-weight="500">by jobless</text>
     <text x="2" y="318" fill="#6F6F6D" font-family="ui-monospace, SFMono-Regular, monospace" font-size="18" font-weight="500" letter-spacing="3">END-TO-END ENCRYPTED</text>
   </g>
 </svg>`;
@@ -152,9 +152,21 @@ const iconURL = `${BASE_URL}/icon.png`;
 const headerURL = `${BASE_URL}/header.png`;
 const sourceURL = `${BASE_URL}/source.json`;
 
+/** @param {string} version */
+function compareSemver(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 /** AltStore feed lists public releases only — dev builds stay off this API. */
 function isPublicEntry(entry) {
   if (entry.channel === 'developer') return false;
+  if (entry.deprecated) return false;
   return entry.channel === 'public' || entry.channel === undefined;
 }
 
@@ -211,6 +223,12 @@ if (appVersions.length === 0) {
   console.error('No IPA files found in deploy/altstore/');
   process.exit(1);
 }
+
+appVersions.sort((a, b) => {
+  const vc = compareSemver(b.version, a.version);
+  if (vc !== 0) return vc;
+  return Number(b.buildVersion) - Number(a.buildVersion);
+});
 
 const latestEntry = latestEntryManifest;
 const latestIpa = join(ALTSTORE_DIR, latestEntry.ipaFile);

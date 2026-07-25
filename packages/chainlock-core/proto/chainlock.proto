@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package chainlock;
+
+// Wire packet wrapping Double Ratchet ciphertext.
+message ChainLockPacket {
+  fixed32 chain_tag = 1;
+  uint32 message_index = 2;
+  uint32 ratchet_type = 3;
+  bytes ratchet_body = 4;
+  uint64 server_timestamp = 5;
+}
+
+// Inner payload encrypted by Double Ratchet (exact time lives here).
+message ChainLockPayload {
+  bytes inner_plaintext = 1;
+  uint64 exact_timestamp = 2;
+}
+
+// Prekey bundle published for X3DH session establishment.
+message PreKeyBundlePublish {
+  uint32 registration_id = 1;
+  uint32 device_id = 2;
+  uint32 pre_key_id = 3;
+  bytes pre_key_public = 4;
+  uint32 signed_pre_key_id = 5;
+  bytes signed_pre_key_public = 6;
+  bytes signed_pre_key_signature = 7;
+  bytes identity_key_public = 8;
+  int64 signed_pre_key_created_at = 9;
+}

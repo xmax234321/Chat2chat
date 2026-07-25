@@ -45,28 +45,28 @@
       ],
       "versions": [
         {
-          "version": "1.4.1",
-          "buildVersion": "49",
-          "date": "2026-07-04",
-          "localizedDescription": "Deprecated — no longer accepted by relay.",
-          "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.4.1-build49.ipa",
-          "size": 2367136,
-          "sha256": "d988785c993e050a1b82584edb58c1d383b73f45dfc3bb685a35a9c640ae0e22",
+          "version": "1.5.2",
+          "buildVersion": "54",
+          "date": "2026-07-06",
+          "localizedDescription": "Auto-save backups and login files to Files (Backups folder). Entry animation on launch. Toast fixes and smoother recover-from-backup flow.",
+          "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.5.2-build54.ipa",
+          "size": 2392525,
+          "sha256": "ea01947e44efcb2f1c2915a3523658b9a6e8704fc759bac3aa71e709815f4788",
           "minOSVersion": "14.0"
         }
       ],
-      "version": "1.4.1",
-      "versionDate": "2026-07-04",
-      "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.4.1-build49.ipa",
-      "size": 2367136
+      "version": "1.5.2",
+      "versionDate": "2026-07-06",
+      "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.5.2-build54.ipa",
+      "size": 2392525
     }
   ],
   "news": [
     {
-      "title": "What's new in Chat2Chat 1.4.1",
-      "identifier": "chat2chat-1.4.1-build49",
-      "caption": "Deprecated — no longer accepted by relay.",
-      "date": "2026-07-04",
+      "title": "What's new in Chat2Chat 1.5.2",
+      "identifier": "chat2chat-1.5.2-build54",
+      "caption": "Auto-save backups and login files to Files (Backups folder). Entry animation on launch. Toast fixes and smoother recover-from-backup flow.",
+      "date": "2026-07-06",
       "tintColor": "E8A98F",
       "notify": true,
       "url": "https://chat2chat.org/download/versions/",

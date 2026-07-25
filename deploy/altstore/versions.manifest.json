@@ -1,0 +1,69 @@
+{
+  "channel": "public",
+  "latest": "1.5.2",
+  "minSupported": {
+    "version": "1.5",
+    "buildVersion": "52"
+  },
+  "versions": [
+    {
+      "version": "1.5.2",
+      "buildVersion": "54",
+      "channel": "public",
+      "label": "Chat2Chat",
+      "ipaFile": "Chat2Chat-1.5.2-build54.ipa",
+      "date": "2026-07-06",
+      "description": "Auto-save backups and login files to Files (Backups folder). Entry animation on launch. Toast fixes and smoother recover-from-backup flow."
+    },
+    {
+      "version": "1.5.1",
+      "buildVersion": "53",
+      "channel": "public",
+      "label": "Chat2Chat",
+      "ipaFile": "Chat2Chat-1.5.1-build53.ipa",
+      "date": "2026-07-06",
+      "deprecated": true,
+      "description": "Auto-save backups and login files to Files (Backups folder). No manual share sheet."
+    },
+    {
+      "version": "1.5",
+      "buildVersion": "52",
+      "channel": "public",
+      "label": "Chat2Chat",
+      "ipaFile": "Chat2Chat-1.5-build52.ipa",
+      "date": "2026-07-06",
+      "deprecated": true,
+      "description": "Security release: Keychain + encrypted IndexedDB, TLS-only relay, ChainLock/FastFile encryption, Face ID gates data unlock, AltStore SHA256 manifests."
+    },
+    {
+      "version": "1.4.2",
+      "buildVersion": "51",
+      "channel": "public",
+      "label": "Chat2Chat",
+      "ipaFile": "Chat2Chat-1.4.2-build51.ipa",
+      "date": "2026-07-06",
+      "deprecated": true,
+      "description": "Superseded by 1.5 — update required for latest security baseline."
+    },
+    {
+      "version": "1.4.2",
+      "buildVersion": "50",
+      "channel": "public",
+      "label": "Chat2Chat",
+      "ipaFile": "Chat2Chat-1.4.2-build50.ipa",
+      "date": "2026-07-06",
+      "deprecated": true,
+      "description": "Deprecated — blocked by relay."
+    },
+    {
+      "version": "1.4.1",
+      "buildVersion": "49",
+      "channel": "public",
+      "label": "Chat2Chat",
+      "ipaFile": "Chat2Chat-1.4.1-build49.ipa",
+      "date": "2026-07-04",
+      "deprecated": true,
+      "description": "Deprecated — blocked by relay."
+    }
+  ]
+}

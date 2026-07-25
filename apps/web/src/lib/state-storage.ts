@@ -1,16 +1,18 @@
 /**
  * Encrypted at-rest storage for app state.
  * - Sensitive fields (messages, contacts, identity) are AES-256-GCM sealed in IndexedDB.
- * - With app PIN: key derived from PIN via PBKDF2.
+ * - With app PIN: key derived from PIN (fast HMAC; legacy PBKDF2 migrated on unlock).
  * - On native without PIN: device key stored in iOS Keychain.
  * - On web without PIN: device key in IndexedDB (never localStorage).
  * - Mnemonic on native is stored only in Keychain, never localStorage/IndexedDB plaintext.
  * - localStorage holds only non-secret meta (onboarding, lock prefs, UI settings).
  */
 import { deriveKeyFromPassword, encryptWithPassword, decryptWithPassword } from '@chat2chat/crypto/browser';
+import { hmac } from '@noble/hashes/hmac';
+import { sha256 } from '@noble/hashes/sha2';
 import { utf8ToBytes } from '@noble/hashes/utils';
 import { isCapacitor } from './platform';
-import { secureStorageGet, secureStorageRemove, secureStorageSet, secureStorageGetBiometric, secureStorageSetBiometric, secureStorageRemoveBiometric } from './native-secure-storage';
+import { secureStorageGet, secureStorageRemove, secureStorageSet, secureStorageSetBiometric, secureStorageRemoveBiometric } from './native-secure-storage';
 import { idbClear, idbGet, idbRemove, idbSet } from './state-idb';
 import type { AppState } from './types';
 import type { ChatMessage } from './types';
@@ -22,13 +24,17 @@ const META_KEY = 'chat2chat-web-meta';
 
 const KEYCHAIN_DEVICE_KEY = 'device-encryption-key';
 const KEYCHAIN_MNEMONIC = 'identity-mnemonic';
+import { secureStorageGetBiometric } from '../lib/native-secure-storage';
+
 const KEYCHAIN_BIOMETRIC_SEAL_KEY = 'biometric-seal-key';
+const KEYCHAIN_BIOMETRIC_SEAL_KEY_FAST = 'biometric-seal-key-fast';
 
 const STORAGE_VERSION = 3;
 
-type MetaState = Pick<AppState, 'onboardingDone' | 'appLock' | 'appLockPrefs' | 'settings'> & {
+type MetaState = Pick<AppState, 'onboardingDone' | 'appLock' | 'appLockPrefs' | 'settings' | 'userProfile' | 'accountCreatedAt'> & {
   v: number;
   sealed: boolean;
+  chatReadCursors?: AppState['chatReadCursors'];
 };
 
 type SealedState = {
@@ -38,7 +44,6 @@ type SealedState = {
   groups?: AppState['groups'];
   groupInvites?: AppState['groupInvites'];
   notifications?: AppState['notifications'];
-  chatReadCursors?: AppState['chatReadCursors'];
   callHistory?: AppState['callHistory'];
   serverUrl?: AppState['serverUrl'];
 };
@@ -54,11 +59,20 @@ let activeKey: Uint8Array | null = null;
 let storageLocked = false;
 let initPromise: Promise<void> | null = null;
 let initDone = false;
+let persistSealedTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePersistSealed(): void {
+  if (persistSealedTimer) clearTimeout(persistSealedTimer);
+  persistSealedTimer = setTimeout(() => {
+    persistSealedTimer = null;
+    void persistSealed();
+  }, 350);
+}
 
 function sanitizeMessagesForStorage(messages?: ChatMessage[]): ChatMessage[] | undefined {
   if (!messages) return messages;
   return messages.map((message) => {
-    if (message.content.kind === 'text') return message;
+    if (message.content.kind === 'text' || message.content.kind === 'group_invite' || message.content.kind === 'export_block_notice') return message;
     const { previewUrl: _previewUrl, uploading: _uploading, uploadProgress: _uploadProgress, ...rest } = message.content;
     return { ...message, content: rest };
   });
@@ -141,6 +155,8 @@ function splitLegacyState(state: Partial<AppState>): { meta: MetaState; sealed: 
     appLock,
     appLockPrefs,
     settings,
+    userProfile,
+    accountCreatedAt,
     identity,
     contacts,
     messages,
@@ -152,8 +168,8 @@ function splitLegacyState(state: Partial<AppState>): { meta: MetaState; sealed: 
     serverUrl,
   } = state;
   return {
-    meta: { v: STORAGE_VERSION, sealed: true, onboardingDone, appLock, appLockPrefs, settings },
-    sealed: { identity, contacts, messages, groups, groupInvites, notifications, chatReadCursors, callHistory, serverUrl },
+    meta: { v: STORAGE_VERSION, sealed: true, onboardingDone, appLock, appLockPrefs, settings, userProfile, accountCreatedAt, chatReadCursors },
+    sealed: { identity, contacts, messages, groups, groupInvites, notifications, callHistory, serverUrl },
   };
 }
 
@@ -200,7 +216,6 @@ function extractSealedPatch(patch: Partial<AppState>): Partial<SealedState> {
   if ('groups' in patch) sealed.groups = patch.groups;
   if ('groupInvites' in patch) sealed.groupInvites = patch.groupInvites;
   if ('notifications' in patch) sealed.notifications = patch.notifications;
-  if ('chatReadCursors' in patch) sealed.chatReadCursors = patch.chatReadCursors;
   if ('callHistory' in patch) sealed.callHistory = patch.callHistory;
   if ('serverUrl' in patch) sealed.serverUrl = patch.serverUrl;
   return sealed;
@@ -212,6 +227,9 @@ function extractMetaPatch(patch: Partial<AppState>): Partial<MetaState> {
   if ('appLock' in patch) meta.appLock = patch.appLock;
   if ('appLockPrefs' in patch) meta.appLockPrefs = patch.appLockPrefs;
   if ('settings' in patch) meta.settings = patch.settings;
+  if ('userProfile' in patch) meta.userProfile = patch.userProfile;
+  if ('accountCreatedAt' in patch) meta.accountCreatedAt = patch.accountCreatedAt;
+  if ('chatReadCursors' in patch) meta.chatReadCursors = patch.chatReadCursors;
   return meta;
 }
 
@@ -230,6 +248,32 @@ async function persistSealed(): Promise<void> {
 function hasPinEncryption(): boolean {
   const meta = readMeta();
   return Boolean(meta.appLock?.salt && meta.appLock?.verifier);
+}
+
+export function hasPinSealedStorage(): boolean {
+  return hasPinEncryption();
+}
+
+/** Unlock encrypted storage after a successful biometric prompt. */
+export async function unlockStorageAfterBiometricAuth(): Promise<boolean> {
+  if (!isStateStorageLocked()) return true;
+
+  if (!hasPinEncryption()) {
+    storageLocked = false;
+    return true;
+  }
+
+  const keyB64 = await secureStorageGet(KEYCHAIN_BIOMETRIC_SEAL_KEY_FAST);
+  if (keyB64) return unlockStateStorageWithKey(base64ToBytes(keyB64));
+
+  const protectedKey = await secureStorageGetBiometric(KEYCHAIN_BIOMETRIC_SEAL_KEY, 'Unlock Chat2Chat');
+  if (protectedKey) return unlockStateStorageWithKey(base64ToBytes(protectedKey));
+
+  return false;
+}
+
+function derivePinSealKey(pin: string, salt: Uint8Array): Uint8Array {
+  return hmac(sha256, salt, utf8ToBytes(`chat2chat-pin-seal-v3:${pin}`));
 }
 
 async function unlockWithKey(key: Uint8Array): Promise<boolean> {
@@ -350,13 +394,21 @@ export async function unlockStateStorage(pin: string): Promise<boolean> {
   const meta = readMeta();
   if (!meta.appLock?.salt) return false;
   const salt = base64ToBytes(meta.appLock.salt);
+  const fastKey = derivePinSealKey(pin, salt);
+  if (await unlockWithKey(fastKey)) return true;
+
   const pinKey = deriveKeyFromPassword(pin, salt);
-  if (await unlockWithKey(pinKey)) return true;
+  if (await unlockWithKey(pinKey)) {
+    activeKey = fastKey;
+    storageLocked = false;
+    await persistSealed();
+    return true;
+  }
 
   // Post-migration: legacy plaintext may have been sealed with the device key.
   const deviceKey = await getOrCreateDeviceKey();
   if (await unlockWithKey(deviceKey)) {
-    activeKey = pinKey;
+    activeKey = fastKey;
     storageLocked = false;
     await persistSealed();
     return true;
@@ -375,23 +427,24 @@ export function lockStateStorage(): void {
 /** Store the active sealing key for biometric unlock (native only, storage must be unlocked). */
 export async function storeBiometricUnlockKey(): Promise<boolean> {
   if (!isCapacitor() || storageLocked || !activeKey) return false;
-  return secureStorageSetBiometric(KEYCHAIN_BIOMETRIC_SEAL_KEY, bytesToBase64(activeKey));
+  const keyB64 = bytesToBase64(activeKey);
+  const fastOk = await secureStorageSet(KEYCHAIN_BIOMETRIC_SEAL_KEY_FAST, keyB64);
+  void secureStorageSetBiometric(KEYCHAIN_BIOMETRIC_SEAL_KEY, keyB64);
+  return fastOk;
 }
 
 /** Remove biometric sealing key from Keychain. */
 export async function clearBiometricUnlockKey(): Promise<void> {
   await secureStorageRemoveBiometric(KEYCHAIN_BIOMETRIC_SEAL_KEY);
+  await secureStorageRemove(KEYCHAIN_BIOMETRIC_SEAL_KEY_FAST);
 }
 
 /**
- * Unlock sealed storage via biometric-protected Keychain item.
- * Triggers Face ID / Touch ID on native; returns false when unavailable or cancelled.
+ * Unlock sealed storage via Face ID / Touch ID.
+ * Caller should run authenticateBiometric first when prompting the user.
  */
 export async function unlockStateStorageWithBiometricKey(): Promise<boolean> {
-  if (!isCapacitor()) return false;
-  const keyB64 = await secureStorageGetBiometric(KEYCHAIN_BIOMETRIC_SEAL_KEY, 'Unlock Chat2Chat');
-  if (!keyB64) return false;
-  return unlockStateStorageWithKey(base64ToBytes(keyB64));
+  return unlockStorageAfterBiometricAuth();
 }
 
 /** Reload sealed cache from disk when re-opening after UI lock (Face ID). */
@@ -408,13 +461,33 @@ export function loadState(): Partial<AppState> {
       appLock: meta.appLock,
       appLockPrefs: meta.appLockPrefs,
       settings: meta.settings,
+      userProfile: meta.userProfile,
+      accountCreatedAt: meta.accountCreatedAt,
+      chatReadCursors: meta.chatReadCursors,
     };
   }
+
+  const legacyCursors = (sealedCache as { chatReadCursors?: AppState['chatReadCursors'] }).chatReadCursors;
+  const chatReadCursors = meta.chatReadCursors ?? legacyCursors;
+  if (!meta.chatReadCursors && legacyCursors && Object.keys(legacyCursors).length > 0) {
+    writeMeta({ ...meta, chatReadCursors: legacyCursors, v: STORAGE_VERSION, sealed: true });
+    if (legacyCursors) {
+      const { chatReadCursors: _removed, ...rest } = sealedCache as SealedState & {
+        chatReadCursors?: AppState['chatReadCursors'];
+      };
+      sealedCache = rest;
+      if (activeKey) schedulePersistSealed();
+    }
+  }
+
   return {
     onboardingDone: meta.onboardingDone,
     appLock: meta.appLock,
     appLockPrefs: meta.appLockPrefs,
     settings: meta.settings,
+    userProfile: meta.userProfile,
+    accountCreatedAt: meta.accountCreatedAt,
+    chatReadCursors,
     ...sealedCache,
   };
 }
@@ -435,12 +508,16 @@ export function saveState(patch: Partial<AppState>): void {
     }
     sealedCache = { ...sealedCache, ...sealedPatch };
     if (!activeKey) return;
-    void persistSealed();
+    schedulePersistSealed();
   }
 }
 
 /** Force synchronous flush of sealed data (for logout). */
 export async function flushStateStorage(): Promise<void> {
+  if (persistSealedTimer) {
+    clearTimeout(persistSealedTimer);
+    persistSealedTimer = null;
+  }
   if (activeKey && !storageLocked) {
     await persistSealed();
   }
@@ -466,7 +543,7 @@ export async function clearAllStateStorage(): Promise<void> {
 export async function rekeyStateStorage(newPin: string, pinSalt: string): Promise<void> {
   if (storageLocked || !activeKey) throw new Error('Storage must be unlocked to rekey');
   await persistSealed();
-  activeKey = deriveKeyFromPassword(newPin, base64ToBytes(pinSalt));
+  activeKey = derivePinSealKey(newPin, base64ToBytes(pinSalt));
   await persistSealed();
 }
 
@@ -474,7 +551,7 @@ export async function rekeyStateStorage(newPin: string, pinSalt: string): Promis
 export async function enablePinStateEncryption(pin: string, pinSalt: string): Promise<void> {
   if (storageLocked) throw new Error('Storage must be unlocked');
   await persistSealed();
-  activeKey = deriveKeyFromPassword(pin, base64ToBytes(pinSalt));
+  activeKey = derivePinSealKey(pin, base64ToBytes(pinSalt));
   storageLocked = false;
   await persistSealed();
 }

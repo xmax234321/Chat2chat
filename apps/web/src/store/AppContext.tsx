@@ -9,6 +9,7 @@ import {
   type Identity,
 } from '@chat2chat/crypto/browser';
 import { isCapacitor, isDesktopShell, isNativeMobile, isIosCapacitor } from '../lib/platform';
+import { authenticateBiometric } from '../lib/biometric';
 import { BrowserTransport, UpgradeRequiredError } from '../lib/transport';
 import { WebMedia } from '../lib/web-media';
 import { defaultRelayHttpUrl, defaultRelayWsUrl, pickRelayUrls, preferredRelayEndpoints } from '../lib/server-url';
@@ -19,6 +20,7 @@ import type {
   Group,
   GroupDeletePolicy,
   GroupInvite,
+  GroupInviteStatus,
   MessageContent,
   AppSettings,
 } from '../lib/types';
@@ -26,6 +28,7 @@ import {
   loadState,
   saveState,
   previewText,
+  buildMessageListPreview,
   DEFAULT_SETTINGS,
   initials,
   UNKNOWN_CONTACT_ALIAS,
@@ -33,11 +36,13 @@ import {
   generateGroupId,
   DEFAULT_GROUP_DELETE_POLICY,
   normalizeGroup,
+  contactDisplayName,
 } from '../lib/types';
 import {
   unlockStateStorage,
-  unlockStateStorageWithBiometricKey,
+  unlockStorageAfterBiometricAuth,
   lockStateStorage,
+  isStateStorageLocked,
   clearAllStateStorage,
   loadIdentityMnemonic,
   enablePinStateEncryption,
@@ -55,6 +60,8 @@ import {
   resolveMemberAlias,
   type GroupControlPayload,
 } from '../lib/group-protocol';
+import { dedupePendingGroupInviteMessages } from '../lib/group-invite-messages';
+import { truncateUserId } from '../lib/chat-shared-content';
 import { applyAppearance } from '../lib/theme';
 import { NativeAppIcon } from '../lib/native-app-icon';
 import { checkForAppUpdate, compareVersions, type UpdateCheckResult } from '../lib/app-updates';
@@ -65,11 +72,23 @@ import {
 } from '../lib/safe-mode-vault';
 import { getUploadSpeedKbps } from '../lib/connection-metrics';
 import { notifyMessage, notifyToast } from '../lib/notify';
-import { createFullImageBlobUrl, createMediaPreviewUrl, createVideoBubbleThumbUrl } from '../lib/media-thumbnail';
+import { createFullImageBlobUrl, createMediaPreviewUrl, createVideoBubbleThumbUrl, createVideoBubbleThumbFromUrl, createInstantVideoThumbUrl, isVideoFramePreview } from '../lib/media-thumbnail';
 import { enrichOutgoingPreview, quickPreviewForSend } from '../lib/quick-media-preview';
-import { cacheDecryptedMedia, cacheMediaBlob, deleteCachedMediaBlobs, migrateMediaCacheToNativeFs } from '../lib/media-cache';
+import {
+  cacheDecryptedMedia,
+  cacheMediaBlob,
+  deleteCachedMediaBlobs,
+  clearAllMediaCache,
+  migrateMediaCacheToNativeFs,
+  persistOutgoingMedia,
+  readCachedMediaBytes,
+  readCachedNativeRef,
+} from '../lib/media-cache';
+import { createNativeVideoThumbFromMessage } from '../lib/native-video-thumb';
+import { deleteCachedVideoThumbs, persistVideoThumbPreview } from '../lib/video-thumb-cache';
 import type { PickedMedia } from '../lib/pick-media';
-import { isVideoPick, isFilePick, isVoicePick, prepareImageForSend } from '../lib/prepare-media-for-send';
+import { mediaGroupWireFields, mediaGroupWireFieldsFromPick } from '../lib/media-group';
+import { isVideoPick, isFilePick, isVoicePick, prepareImageForSend, prepareVideoForSend, prepareFileForSend } from '../lib/prepare-media-for-send';
 import {
   buildBackupPayload,
   encryptBackupPayload,
@@ -90,13 +109,16 @@ import {
   isAppLockConfigured,
   loadStoredAppLock,
   saveAppLockPassword,
-  validateAppLockPassword,
+  validateAppLockPasscode,
   verifyAppLockPassword,
-  type AppLockPinLength,
+  loadAppLockPasscodeType,
+  type AppLockPasscodeType,
 } from '../lib/app-lock';
 import { loadAppLockPreferences } from '../lib/app-lock-settings';
+import { pruneNonEssentialAppFolderFiles } from '../lib/app-backups-folder';
+import type { MessageReplyRef } from '../lib/message-reply';
 import type { DesktopLinkOffer } from '../lib/desktop-link/protocol';
-import { pairPhoneWithDesktop, onDesktopLinkMessage, sendMessageToDesktop, disconnectPhoneBle, reconnectPhoneToDesktop, setPhoneLinkEndpoint } from '../lib/desktop-link/phone';
+import { pairPhoneWithDesktop, onDesktopLinkMessage, sendMessageToDesktop, disconnectPhoneBle, reconnectPhoneToDesktop, setPhoneLinkEndpoint, notifyPhoneLinkOffline } from '../lib/desktop-link/phone';
 import {
   bindDesktopLinkHandlers,
   sendRelayViaPhone,
@@ -114,13 +136,45 @@ import {
   type CallSignalPayload,
 } from '../lib/call-signaling';
 import {
+  encodeChatPrivacyControl,
+  decodeChatPrivacyControl,
+  type ChatPrivacyControlPayload,
+} from '../lib/chat-privacy-protocol';
+import { canDisableExportBlockForPeer } from '../lib/export-block-lock';
+import { ensureSavedMessagesContact, isSavedMessagesContact, isSavedMessagesId, migrateSavedMessagesState } from '../lib/saved-messages';
+import { ephemeralSendAllowed } from '../lib/ephemeral-send-policy';
+import { ensureAccountCreatedAt } from '../lib/account-created';
+import { loadUserProfile, resolveDisplayName } from '../lib/user-profile';
+import {
   decryptIncomingMessage,
   encryptOutgoingMessage,
 } from '../lib/message-crypto';
+import {
+  decodeMessageReceipt,
+  encodeMessageReceipt,
+  type MessageReceiptPayload,
+} from '../lib/message-receipt-protocol';
+import { deliveryMetaForSend } from '../lib/message-delivery';
+import {
+  exportBlocksFromContacts,
+  fetchUserVault,
+  uploadUserVault,
+} from '../lib/user-vault';
+
+function ownSenderDisplayName(): string {
+  return resolveDisplayName(loadUserProfile().displayName);
+}
 
 interface SavedIdentity {
   mnemonic: string;
 }
+
+type ConnectionSnapshot = {
+  connected: boolean;
+  connecting: boolean;
+  connectionPingMs: number | null;
+  desktopBleConnected: boolean;
+};
 
 interface AppContextValue {
   identity: Identity | null;
@@ -129,6 +183,8 @@ interface AppContextValue {
   connected: boolean;
   connecting: boolean;
   connectionPingMs: number | null;
+  connectionSnapshot: ConnectionSnapshot;
+  setConnectionStatusLive: (live: boolean) => void;
   uploadSpeedKbps: number | null;
   settings: AppSettings;
   createAccount: () => Identity;
@@ -136,14 +192,23 @@ interface AppContextValue {
   finishOnboarding: () => void;
   addContact: (userId: string, alias: string) => boolean;
   renameContact: (userId: string, alias: string) => void;
+  setContactAvatar: (userId: string, avatar: string) => void;
+  deleteMessage: (messageId: string) => void;
+  skipContactNaming: (userId: string) => void;
   deleteChat: (contactId: string) => void;
+  clearChatMessages: (contactId: string) => void;
+  setContactNote: (userId: string, note: string) => void;
+  blockContact: (userId: string) => void;
+  unblockContact: (userId: string) => void;
+  setContactExportBlocked: (userId: string, exportBlocked: boolean) => boolean;
   verifyContact: (userId: string) => void;
-  sendText: (contactId: string, body: string) => Promise<void>;
+  sendText: (contactId: string, body: string, replyTo?: MessageReplyRef) => Promise<void>;
   sendCallSignal: (contactId: string, signal: CallSignalPayload) => Promise<void>;
   setCallSignalHandler: (handler: ((from: string, signal: CallSignal) => void) | null) => void;
   sendMedia: (contactId: string, picked: PickedMedia) => Promise<void>;
   cancelUpload: (messageId: string) => void;
   getContact: (id: string) => Contact | undefined;
+  getThread: (contactId: string) => ChatMessage[];
   copyToClipboard: (text: string) => Promise<void>;
   logout: () => void;
   toggleNotifications: () => void;
@@ -178,17 +243,21 @@ interface AppContextValue {
   leaveGroup: (groupId: string) => Promise<void>;
   deleteGroup: (groupId: string) => Promise<void>;
   markNotificationsRead: () => void;
-  sendGroupText: (groupId: string, body: string) => Promise<void>;
+  sendGroupText: (groupId: string, body: string, replyTo?: MessageReplyRef) => Promise<void>;
   markGroupMessageViewed: (groupId: string, messageId: string) => void;
+  markEphemeralClosed: (messageId: string) => void;
   dismissNotification: (id: string) => void;
   chatReadCursors: Record<string, number>;
+  flashMediaGroupId: string | null;
+  signalMediaGroupSent: (mediaGroupId: string) => void;
   appLockEnabled: boolean;
   appUnlocked: boolean;
   unlockApp: (password: string, viaBiometric?: boolean) => Promise<boolean>;
-  enableAppLock: (password: string, pinLength?: AppLockPinLength) => Promise<void>;
-  changeAppLockPassword: (current: string, next: string, pinLength?: AppLockPinLength) => Promise<void>;
+  enableAppLock: (password: string, passcodeType?: AppLockPasscodeType) => Promise<void>;
+  changeAppLockPassword: (current: string, next: string, passcodeType?: AppLockPasscodeType) => Promise<void>;
   disableAppLock: (password: string) => Promise<boolean>;
   lockApp: () => void;
+  resetAppLockViaBackupRecovery: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -200,7 +269,12 @@ function randomId(): string {
 }
 
 function encodePayload(
-  content: MessageContent & { from?: string; senderAlias?: string; groupId?: string },
+  content: MessageContent & {
+    from?: string;
+    senderAlias?: string;
+    groupId?: string;
+    replyTo?: MessageReplyRef;
+  },
   client?: ClientVersionInfo | null,
 ): Uint8Array {
   if (content.groupId && content.from && content.senderAlias) {
@@ -209,6 +283,7 @@ function encodePayload(
       senderAlias: content.senderAlias,
       groupId: content.groupId,
       client,
+      replyTo: content.replyTo,
     });
   }
   const clientFields = client
@@ -216,10 +291,23 @@ function encodePayload(
     : {};
   if (content.kind === 'text') {
     return new TextEncoder().encode(
-      JSON.stringify({ kind: 'text', body: content.body, from: content.from, ...clientFields }),
+      JSON.stringify({
+        kind: 'text',
+        body: content.body,
+        from: content.from,
+        ...(content.senderAlias ? { senderAlias: content.senderAlias } : {}),
+        ...(content.replyTo ? { replyTo: content.replyTo } : {}),
+        ...clientFields,
+      }),
     );
   }
   return new TextEncoder().encode(JSON.stringify({ ...content, from: content.from, ...clientFields }));
+}
+
+function incomingReply(parsed: { replyTo?: MessageReplyRef }): MessageReplyRef | undefined {
+  const reply = parsed.replyTo;
+  if (!reply?.id || !reply.preview) return undefined;
+  return reply;
 }
 
 function decodePayload(
@@ -240,6 +328,18 @@ function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
   return btoa(binary);
+}
+
+function groupInviteMessageContent(inv: GroupInvite): Extract<MessageContent, { kind: 'group_invite' }> {
+  return {
+    kind: 'group_invite',
+    inviteId: inv.id,
+    groupId: inv.groupId,
+    groupName: inv.groupName,
+    status: inv.status,
+    fromUserId: inv.fromUserId,
+    fromAlias: inv.fromAlias,
+  };
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -293,8 +393,7 @@ function isViewingContact(contactId: string): boolean {
 function contactNotificationTitle(contacts: Contact[], senderId: string): string {
   const contact = contacts.find((c) => c.userId === senderId);
   if (!contact) return UNKNOWN_CONTACT_ALIAS;
-  if (!contact.isUnknown || contact.alias !== UNKNOWN_CONTACT_ALIAS) return contact.alias;
-  return UNKNOWN_CONTACT_ALIAS;
+  return contactDisplayName(contact);
 }
 
 function trySystemNotification(title: string, body: string, tag: string): void {
@@ -327,23 +426,48 @@ function loadSettings(): AppSettings {
   return base;
 }
 
+const EMPTY_THREAD: ChatMessage[] = [];
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const saved = loadState();
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [contacts, setContacts] = useState<Contact[]>(saved.contacts ?? []);
   const [groups, setGroups] = useState<Group[]>(() => (saved.groups ?? []).map(normalizeGroup));
   const [groupInvites, setGroupInvites] = useState<GroupInvite[]>(saved.groupInvites ?? []);
+  const groupInvitesRef = useRef(groupInvites);
   const [notifications, setNotifications] = useState<AppNotification[]>(saved.notifications ?? []);
   const [chatReadCursors, setChatReadCursors] = useState<Record<string, number>>(
     () => saved.chatReadCursors ?? {},
   );
+  const [flashMediaGroupId, setFlashMediaGroupId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>(saved.messages ?? []);
+  const messagesByContact = useMemo(() => {
+    const map = new Map<string, ChatMessage[]>();
+    for (const message of messages) {
+      const bucket = map.get(message.contactId);
+      if (bucket) bucket.push(message);
+      else map.set(message.contactId, [message]);
+    }
+    return map;
+  }, [messages]);
+  const getThread = useCallback(
+    (contactId: string) => messagesByContact.get(contactId) ?? EMPTY_THREAD,
+    [messagesByContact],
+  );
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [connectionPingMs, setConnectionPingMs] = useState<number | null>(null);
   const [uploadSpeedKbps, setUploadSpeedKbps] = useState<number | null>(null);
   const [desktopBleConnected, setDesktopBleConnected] = useState(false);
+  const connectionStatusLiveRef = useRef(false);
+  const [connectionSnapshot, setConnectionSnapshot] = useState<ConnectionSnapshot>({
+    connected: false,
+    connecting: false,
+    connectionPingMs: null,
+    desktopBleConnected: false,
+  });
+  const desktopBleConnectedRef = useRef(false);
   const [appLockEnabled, setAppLockEnabled] = useState(isAppLockConfigured);
   const [appUnlocked, setAppUnlocked] = useState(() => !isAppLockConfigured());
   const [upgradeRequiredMessage, setUpgradeRequiredMessage] = useState<string | null>(null);
@@ -356,6 +480,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const groupsRef = useRef(groups);
   const messagesRef = useRef(messages);
   const chatReadCursorsRef = useRef(chatReadCursors);
+  const readReceiptsSentRef = useRef<Set<string>>(new Set());
+  const vaultVersionRef = useRef(1);
+  const processedEnvelopeIdsRef = useRef<Set<string>>(new Set());
   const callSignalHandlerRef = useRef<((from: string, signal: CallSignal) => void) | null>(null);
   const clientVersionRef = useRef<ClientVersionInfo | null>(null);
 
@@ -364,12 +491,64 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [settings]);
 
   useEffect(() => {
+    desktopBleConnectedRef.current = desktopBleConnected;
+  }, [desktopBleConnected]);
+
+  const refreshConnectionSnapshot = useCallback(() => {
+    setConnectionSnapshot({
+      connected,
+      connecting,
+      connectionPingMs,
+      desktopBleConnected,
+    });
+  }, [connected, connecting, connectionPingMs, desktopBleConnected]);
+
+  const setConnectionStatusLive = useCallback(
+    (live: boolean) => {
+      connectionStatusLiveRef.current = live;
+      if (live) {
+        refreshConnectionSnapshot();
+      }
+    },
+    [refreshConnectionSnapshot],
+  );
+
+  useEffect(() => {
+    if (connectionStatusLiveRef.current) {
+      refreshConnectionSnapshot();
+    }
+  }, [connected, connecting, connectionPingMs, desktopBleConnected, refreshConnectionSnapshot]);
+
+  useEffect(() => {
     contactsRef.current = contacts;
   }, [contacts]);
 
   useEffect(() => {
+    if (!identity) return;
+    setContacts((prev) => {
+      const migrated = migrateSavedMessagesState(identity, prev, messagesRef.current);
+      if (migrated.contacts === prev && migrated.messages === messagesRef.current) {
+        const ensured = ensureSavedMessagesContact(prev);
+        if (ensured === prev) return prev;
+        persist({ contacts: ensured });
+        return ensured;
+      }
+      if (migrated.messages !== messagesRef.current) {
+        setMessages(migrated.messages);
+        persist({ messages: migrated.messages });
+      }
+      persist({ contacts: migrated.contacts });
+      return migrated.contacts;
+    });
+  }, [identity?.userId]);
+
+  useEffect(() => {
     groupsRef.current = groups;
   }, [groups]);
+
+  useEffect(() => {
+    groupInvitesRef.current = groupInvites;
+  }, [groupInvites]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -379,9 +558,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
     chatReadCursorsRef.current = chatReadCursors;
   }, [chatReadCursors]);
 
+  const sendMessageReceipt = useCallback(async (contactId: string, receipt: MessageReceiptPayload) => {
+    const id = identityRef.current ?? identity;
+    if (!id || isGroupId(contactId)) return;
+    const messageId = randomId();
+    const bytes = encodeMessageReceipt(receipt);
+
+    if (isDesktopShell() && settingsRef.current.desktopLinked) {
+      await sendRelayViaPhone(contactId, messageId, bytesToBase64(bytes));
+      return;
+    }
+
+    let transport = transportRef.current;
+    if (!transport?.isConnected()) {
+      try {
+        const relay = await pickRelayUrls(relayRef.current);
+        relayRef.current = relay;
+        connectTransport(id, relay);
+        transport = transportRef.current;
+        await transport?.connect();
+      } catch {
+        return;
+      }
+    }
+    if (transport?.isConnected()) {
+      const wire = await encryptOutgoingMessage(contactId, bytes);
+      transport.sendRaw(contactId, messageId, wire);
+    }
+  }, [identity]);
+
+  const handleIncomingReceipt = useCallback((receipt: MessageReceiptPayload) => {
+    setMessages((prev) => {
+      const next = prev.map((m) => {
+        if (m.id !== receipt.messageId || m.direction !== 'out') return m;
+        return {
+          ...m,
+          pendingDelivery: false,
+          deliveryStatus: receipt.kind === 'read_receipt' ? ('read' as const) : ('delivered' as const),
+        };
+      });
+      saveState({ messages: next });
+      return next;
+    });
+  }, []);
+
   const markChatRead = useCallback((contactId: string) => {
-    const thread = messagesRef.current.filter((m) => m.contactId === contactId);
-    const latest = thread.reduce((max, m) => Math.max(max, m.timestamp), 0);
+    const thread = messagesByContact.get(contactId) ?? EMPTY_THREAD;
+    const latest = thread.length ? thread[thread.length - 1]!.timestamp : 0;
     const at = Math.max(latest, Date.now());
     setChatReadCursors((prev) => {
       if ((prev[contactId] ?? 0) >= at) return prev;
@@ -397,7 +620,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       persist({ notifications: next });
       return next;
     });
-  }, []);
+
+    const selfId = identityRef.current?.userId;
+    if (!selfId || isGroupId(contactId)) return;
+    for (const msg of thread) {
+      if (msg.direction !== 'in' || readReceiptsSentRef.current.has(msg.id)) continue;
+      readReceiptsSentRef.current.add(msg.id);
+      void sendMessageReceipt(contactId, {
+        kind: 'read_receipt',
+        from: selfId,
+        messageId: msg.id,
+        at: Date.now(),
+      });
+    }
+  }, [messagesByContact, sendMessageReceipt]);
 
   const setActiveChatContact = useCallback(
     (contactId: string | null) => {
@@ -420,6 +656,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const pushMessage = (msg: ChatMessage) => {
     setMessages((prev) => {
       if (prev.some((m) => m.id === msg.id)) return prev;
+
+      if (msg.content.kind === 'group_invite' && msg.content.status === 'pending') {
+        const inviteContent = msg.content;
+        const existingIdx = prev.findIndex(
+          (m) =>
+            m.contactId === msg.contactId &&
+            m.content.kind === 'group_invite' &&
+            m.content.groupId === inviteContent.groupId &&
+            m.content.status === 'pending',
+        );
+        if (existingIdx >= 0) {
+          const next = [...prev];
+          next[existingIdx] = {
+            ...next[existingIdx]!,
+            id: msg.id,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            direction: msg.direction,
+          };
+          persist({ messages: next });
+          return next;
+        }
+      }
+
       const next = [...prev, msg];
       persist({ messages: next });
       return next;
@@ -432,6 +692,121 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const updateGroupInviteMessageStatus = useCallback((inviteId: string, status: GroupInviteStatus) => {
+    setMessages((prev) => {
+      let changed = false;
+      const next = prev.map((m): ChatMessage => {
+        if (m.content.kind !== 'group_invite' || m.content.inviteId !== inviteId) return m;
+        changed = true;
+        return { ...m, content: { ...m.content, status } };
+      });
+      if (!changed) return prev;
+      persist({ messages: next });
+      return next;
+    });
+  }, []);
+
+  const updateOutgoingInviteStatusForPeer = useCallback(
+    (groupId: string, peerUserId: string, status: GroupInviteStatus) => {
+      setMessages((prev) => {
+        let changed = false;
+        const next = prev.map((m): ChatMessage => {
+          if (
+            m.contactId !== peerUserId ||
+            m.direction !== 'out' ||
+            m.content.kind !== 'group_invite' ||
+            m.content.groupId !== groupId
+          ) {
+            return m;
+          }
+          changed = true;
+          return { ...m, content: { ...m.content, status } };
+        });
+        if (!changed) return prev;
+        persist({ messages: next });
+        return next;
+      });
+    },
+    [],
+  );
+
+  const purgeMessage = useCallback((messageId: string) => {
+    setMessages((prev) => {
+      const next = prev.filter((m) => m.id !== messageId);
+      if (next.length === prev.length) return prev;
+      persist({ messages: next });
+      return next;
+    });
+  }, []);
+
+  const updateMessageMeta = useCallback((messageId: string, patch: Partial<ChatMessage>) => {
+    setMessages((prev) => {
+      const next = prev.map((m) => {
+        if (m.id !== messageId) return m;
+        const merged = { ...m, ...patch };
+        if (patch.pendingDelivery === true) {
+          merged.deliveryStatus = 'pending';
+        } else if (
+          patch.pendingDelivery === false &&
+          merged.direction === 'out' &&
+          !patch.deliveryStatus &&
+          merged.deliveryStatus !== 'delivered' &&
+          merged.deliveryStatus !== 'read'
+        ) {
+          merged.deliveryStatus = 'sent';
+        }
+        return merged;
+      });
+      persist({ messages: next });
+      return next;
+    });
+  }, []);
+
+  const signalMediaGroupSent = useCallback((mediaGroupId: string) => {
+    setFlashMediaGroupId(mediaGroupId);
+    window.setTimeout(() => {
+      setFlashMediaGroupId((current) => (current === mediaGroupId ? null : current));
+    }, 700);
+  }, []);
+
+  const syncExportBlockVault = useCallback(async () => {
+    const id = identityRef.current ?? identity;
+    if (!id) return;
+    const mnemonic = id.mnemonic ?? (await loadIdentityMnemonic());
+    if (!mnemonic) return;
+    const exportBlocks = exportBlocksFromContacts(contactsRef.current);
+    const version = vaultVersionRef.current + 1;
+    vaultVersionRef.current = version;
+    try {
+      await uploadUserVault(id.userId, mnemonic, { version, exportBlocks });
+    } catch {
+      /* offline */
+    }
+  }, [identity]);
+
+  const mergeVaultExportBlocks = useCallback(async () => {
+    const id = identityRef.current ?? identity;
+    if (!id) return;
+    const mnemonic = id.mnemonic ?? (await loadIdentityMnemonic());
+    if (!mnemonic) return;
+    const remote = await fetchUserVault(id.userId, mnemonic);
+    if (!remote?.exportBlocks) return;
+    vaultVersionRef.current = Math.max(vaultVersionRef.current, remote.version);
+    setContacts((prev) => {
+      let changed = false;
+      const next = prev.map((c) => {
+        const remoteAt = remote.exportBlocks[c.userId];
+        if (!remoteAt) return c;
+        const localAt = c.exportBlockForPeerAt ?? 0;
+        if (remoteAt <= localAt) return c;
+        changed = true;
+        return { ...c, exportBlockForPeerAt: remoteAt };
+      });
+      if (changed) persist({ contacts: next });
+      return changed ? next : prev;
+    });
+  }, [identity]);
+
   const patchMessage = (
     id: string,
     content: Partial<Extract<MessageContent, { kind: 'image' | 'video' | 'file' | 'voice' }>>,
@@ -439,13 +814,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ) => {
     setMessages((prev) => {
       const next = prev.map((m) => {
-        if (m.id !== id || m.content.kind === 'text') return m;
+        if (m.id !== id || m.content.kind === 'text' || m.content.kind === 'group_invite' || m.content.kind === 'export_block_notice') return m;
         return { ...m, content: { ...m.content, ...content } };
       });
       if (options?.persist !== false) persist({ messages: next });
       return next;
     });
   };
+
+  const notePeerAlias = useCallback((userId: string, peerAlias?: string) => {
+    const name = peerAlias?.trim();
+    if (!name) return;
+    setContacts((prev) => {
+      const idx = prev.findIndex((c) => c.userId === userId);
+      if (idx < 0) {
+        const contact = buildContact(userId, UNKNOWN_CONTACT_ALIAS, true);
+        if (!contact) return prev;
+        const next = [...prev, { ...contact, peerAlias: name }];
+        persist({ contacts: next });
+        return next;
+      }
+      const current = prev[idx]!;
+      if (current.peerAlias === name) return prev;
+      const next = [...prev];
+      next[idx] = { ...current, peerAlias: name };
+      persist({ contacts: next });
+      return next;
+    });
+  }, []);
 
   const ensureContact = useCallback((userId: string) => {
     if (!userId.startsWith('c2c_')) return;
@@ -487,16 +883,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!id) return null;
     let transport = transportRef.current;
     if (transport?.isConnected()) return transport;
+    if (transport?.isConnecting()) {
+      try {
+        await transport.connect();
+      } catch {
+        /* retry below */
+      }
+      if (transport.isConnected()) return transport;
+    }
     try {
       const relay = await pickRelayUrls(relayRef.current);
       relayRef.current = relay;
-      connectTransport(id, relay);
-      transport = transportRef.current;
+      if (!transport) {
+        connectTransport(id, relay);
+        transport = transportRef.current;
+      }
       await transport?.connect();
     } catch {
       /* relay offline */
     }
-    return transport;
+    return transportRef.current;
   }, [identity]);
 
   const fanOutPlaintext = useCallback(
@@ -536,11 +942,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
         case 'group_invite': {
           const inv = control.invite;
           if (inv.fromUserId === selfId) break;
+          ensureContact(inv.fromUserId);
           setGroupInvites((prev) => {
             if (prev.some((x) => x.id === inv.id)) return prev;
             const next = [...prev, inv];
             persist({ groupInvites: next });
             return next;
+          });
+          pushMessage({
+            id: inv.id,
+            contactId: inv.fromUserId,
+            direction: 'in',
+            content: groupInviteMessageContent(inv),
+            timestamp: inv.timestamp,
           });
           pushNotification({
             id: `notif_inv_${inv.id}`,
@@ -556,6 +970,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           break;
         }
         case 'group_invite_accept': {
+          updateOutgoingInviteStatusForPeer(control.groupId, control.userId, 'accepted');
           setGroups((prev) => {
             const idx = prev.findIndex((g) => g.id === control.groupId);
             if (idx < 0) return prev;
@@ -589,6 +1004,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           break;
         }
         case 'group_invite_decline': {
+          updateOutgoingInviteStatusForPeer(control.groupId, control.from, 'declined');
           setGroups((prev) => {
             const idx = prev.findIndex((g) => g.id === control.groupId);
             if (idx < 0) return prev;
@@ -700,14 +1116,77 @@ export function AppProvider({ children }: { children: ReactNode }) {
           break;
       }
     },
-    [pushNotification],
+    [pushNotification, updateOutgoingInviteStatusForPeer],
   );
+
+  const pushExportBlockNotice = useCallback((contactId: string, byUserId: string, byAlias: string, direction: 'in' | 'out') => {
+    const alreadyNoticed = messagesRef.current.some(
+      (m) => m.contactId === contactId && m.content.kind === 'export_block_notice',
+    );
+    if (alreadyNoticed) return;
+    pushMessage({
+      id: randomId(),
+      contactId,
+      direction,
+      content: { kind: 'export_block_notice', byUserId, byAlias },
+      timestamp: Date.now(),
+    });
+  }, []);
+
+  const handleIncomingChatPrivacy = useCallback((control: ChatPrivacyControlPayload) => {
+    const senderId = control.from;
+    const senderAlias = resolveMemberAlias(senderId, contactsRef.current);
+
+    setContacts((prev) => {
+      const next = prev.map((c) => {
+        if (c.userId !== senderId) return c;
+        if (control.kind === 'chat_export_block') {
+          return {
+            ...c,
+            exportBlockedByPeer: true,
+            exportBlockedByPeerAt: control.at,
+          };
+        }
+        return {
+          ...c,
+          exportBlockedByPeer: undefined,
+          exportBlockedByPeerAt: undefined,
+        };
+      });
+      persist({ contacts: next });
+      return next;
+    });
+
+    if (control.kind === 'chat_export_block') {
+      pushExportBlockNotice(senderId, senderId, senderAlias, 'in');
+    }
+  }, [pushExportBlockNotice]);
 
   const relayRef = useRef(preferredRelayEndpoints());
 
+  const claimEnvelope = useCallback((messageId: string): boolean => {
+    if (processedEnvelopeIdsRef.current.has(messageId)) return false;
+    if (messagesRef.current.some((m) => m.id === messageId)) {
+      processedEnvelopeIdsRef.current.add(messageId);
+      return false;
+    }
+    processedEnvelopeIdsRef.current.add(messageId);
+    return true;
+  }, []);
+
   const connectTransport = (id: Identity, relay = relayRef.current) => {
     identityRef.current = id;
-    transportRef.current?.disconnect();
+    for (const msg of messagesRef.current) {
+      processedEnvelopeIdsRef.current.add(msg.id);
+    }
+    const existing = transportRef.current;
+    if (existing && activeUploadsRef.current.size > 0) {
+      if (!existing.isConnected() && !existing.isConnecting()) {
+        void existing.connect();
+      }
+      return;
+    }
+    existing?.disconnect();
     const httpBase = relay.http || defaultRelayHttpUrl();
     const clientInfo = clientVersionRef.current;
     const transport = new BrowserTransport({
@@ -730,21 +1209,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       },
       onMessage: async (env, bytes) => {
-        try {
-          const maybeCall = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-          if (isCallSignal(maybeCall)) {
-            const senderId = maybeCall.from;
-            if (!senderId.startsWith('c2c_')) return;
-            ensureContact(senderId);
-            callSignalHandlerRef.current?.(senderId, maybeCall);
-            await transport.ackDelivery(env.messageId);
-            return;
-          }
-        } catch {
-          /* not a call signal */
+        const ackDuplicate = async () => {
+          await transport.ackDelivery(env.messageId);
+        };
+
+        if (!claimEnvelope(env.messageId)) {
+          await ackDuplicate();
+          return;
         }
 
-        const control = decodeGroupControl(bytes);
+        try {
+          try {
+            const maybeCall = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+            if (isCallSignal(maybeCall)) {
+              const senderId = maybeCall.from;
+              if (!senderId.startsWith('c2c_')) return;
+              ensureContact(senderId);
+              callSignalHandlerRef.current?.(senderId, maybeCall);
+              await transport.ackDelivery(env.messageId);
+              return;
+            }
+          } catch {
+            /* not a call signal */
+          }
+
+          const control = decodeGroupControl(bytes);
         if (control) {
           const selfId = identityRef.current?.userId ?? '';
           handleIncomingGroupControl(control, selfId);
@@ -757,6 +1246,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
           plaintext = await decryptIncomingMessage(env.recipientId ?? '', bytes);
         } catch {
           /* keep raw bytes for legacy peers */
+        }
+
+        const privacy = decodeChatPrivacyControl(plaintext);
+        if (privacy) {
+          const senderId = privacy.from;
+          if (!senderId?.startsWith('c2c_')) return;
+          ensureContact(senderId);
+          handleIncomingChatPrivacy(privacy);
+          await transport.ackDelivery(env.messageId);
+          return;
+        }
+
+        const receipt = decodeMessageReceipt(plaintext);
+        if (receipt) {
+          if (receipt.from?.startsWith('c2c_')) {
+            handleIncomingReceipt(receipt);
+          }
+          await transport.ackDelivery(env.messageId);
+          return;
         }
 
         const parsed = decodePayload(plaintext);
@@ -775,6 +1283,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             senderId,
             senderAlias: parsed.senderAlias ?? resolveMemberAlias(senderId, contactsRef.current),
             content: parsed.kind === 'text' ? { kind: 'text', body: parsed.body } : parsed,
+            replyTo: incomingReply(parsed as { replyTo?: MessageReplyRef }),
             timestamp: Date.now(),
           });
           if (direction === 'in' && settingsRef.current.notificationsEnabled) {
@@ -802,11 +1311,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         ensureContact(senderId);
         noteContactClientVersion(senderId, parsed.appVersion, parsed.appBuild);
+        notePeerAlias(senderId, parsed.senderAlias);
+        if (isContactBlocked(senderId)) {
+          await transport.ackDelivery(env.messageId);
+          return;
+        }
         pushMessage({
           id: env.messageId,
           contactId: senderId,
           direction: 'in',
           content: parsed.kind === 'text' ? { kind: 'text', body: parsed.body } : parsed,
+          replyTo: incomingReply(parsed as { replyTo?: MessageReplyRef }),
           timestamp: Date.now(),
         });
         if (settingsRef.current.notificationsEnabled) {
@@ -817,8 +1332,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
           );
         }
         await transport.ackDelivery(env.messageId);
+        const selfId = identityRef.current?.userId;
+        if (selfId) {
+          void sendMessageReceipt(senderId, {
+            kind: 'delivery_receipt',
+            from: selfId,
+            messageId: env.messageId,
+            at: Date.now(),
+          });
+        }
+        } catch (e) {
+          processedEnvelopeIdsRef.current.delete(env.messageId);
+          throw e;
+        }
       },
       onAttachment: async (env, bucket) => {
+        const ackDuplicate = async () => {
+          await transport.ackDelivery(env.messageId);
+        };
+
+        if (!claimEnvelope(env.messageId)) {
+          await ackDuplicate();
+          return;
+        }
+
         const media = mediaRef.current;
         if (!media) return;
         try {
@@ -836,18 +1373,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const isImage = received.content.kind === 'image';
           const groupId = (received as { groupId?: string }).groupId;
           const senderAlias = (received as { senderAlias?: string }).senderAlias;
+          notePeerAlias(senderId, senderAlias);
           const contactId = groupId && isGroupId(groupId) ? groupId : senderId;
           const selfId = identityRef.current?.userId ?? '';
           const direction = senderId === selfId ? 'out' : 'in';
 
+          if (!groupId && direction === 'in' && isContactBlocked(senderId)) {
+            await transport.ackDelivery(env.messageId);
+            return;
+          }
+
           let previewUrl: string | undefined;
           if (received.content.kind === 'image') {
             previewUrl = createFullImageBlobUrl(received.data, displayMime);
-          } else if (isVideo || isVoice) {
+          } else if (isVideo) {
+            previewUrl = createInstantVideoThumbUrl(received.content.fileName);
+          } else if (isVoice) {
             previewUrl = URL.createObjectURL(
               new Blob([received.data.slice()], { type: displayMime }),
             );
           }
+
+          const ephemeral =
+            'ephemeral' in received.content
+              ? (received.content as { ephemeral?: import('../lib/ephemeral-media').EphemeralMedia }).ephemeral
+              : undefined;
+          const mediaGroup =
+            'mediaGroupId' in received.content &&
+            typeof (received.content as { mediaGroupId?: string }).mediaGroupId === 'string'
+              ? {
+                  mediaGroupId: (received.content as { mediaGroupId: string }).mediaGroupId,
+                  mediaGroupIndex: (received.content as { mediaGroupIndex?: number }).mediaGroupIndex ?? 0,
+                  mediaGroupTotal: (received.content as { mediaGroupTotal?: number }).mediaGroupTotal ?? 1,
+                }
+              : undefined;
+
+          const wireSentAt =
+            'sentAt' in received.content && typeof (received.content as { sentAt?: number }).sentAt === 'number'
+              ? (received.content as { sentAt: number }).sentAt
+              : undefined;
+          const caption =
+            'caption' in received.content &&
+            typeof (received.content as { caption?: string }).caption === 'string'
+              ? (received.content as { caption: string }).caption
+              : undefined;
 
           pushMessage({
             id: env.messageId,
@@ -866,9 +1435,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ...(isVoice && received.content.durationMs != null
                 ? { durationMs: received.content.durationMs }
                 : {}),
+              ...(ephemeral ? { ephemeral } : {}),
+              ...(mediaGroup && mediaGroup.mediaGroupTotal > 1 ? mediaGroup : {}),
+              ...(caption ? { caption } : {}),
               previewUrl: previewUrl ?? undefined,
             },
-            timestamp: Date.now(),
+            timestamp: wireSentAt ?? Date.now(),
           });
 
           void (async () => {
@@ -882,12 +1454,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
               /* message already visible */
             }
             if (isVideo) {
-              const thumb = await createVideoBubbleThumbUrl(
-                received.data,
-                displayMime,
-                received.content.fileName,
-              );
+              let thumb = await createNativeVideoThumbFromMessage(env.messageId);
+              if (!thumb || !isVideoFramePreview(thumb)) {
+                thumb = await createVideoBubbleThumbUrl(
+                  received.data,
+                  displayMime,
+                  received.content.fileName,
+                );
+              }
+              if (!thumb || !isVideoFramePreview(thumb)) {
+                const fromBlob = await createVideoBubbleThumbFromUrl(
+                  URL.createObjectURL(new Blob([received.data.slice()], { type: displayMime })),
+                  received.content.fileName,
+                );
+                if (fromBlob && isVideoFramePreview(fromBlob)) {
+                  void persistVideoThumbPreview(env.messageId, fromBlob);
+                  setMessages((prev) => {
+                    const next = prev.map((m) =>
+                      m.id === env.messageId && m.content.kind === 'video'
+                        ? { ...m, content: { ...m.content, previewUrl: fromBlob } }
+                        : m,
+                    );
+                    persist({ messages: next });
+                    return next;
+                  });
+                  return;
+                }
+              }
               if (thumb) {
+                void persistVideoThumbPreview(env.messageId, thumb);
                 setMessages((prev) => {
                   const next = prev.map((m) =>
                     m.id === env.messageId && m.content.kind !== 'text'
@@ -941,6 +1536,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
           media.ackBlob(received.content.blobId);
           await transport.ackDelivery(env.messageId);
+          if (!groupId && direction === 'in' && selfId) {
+            void sendMessageReceipt(senderId, {
+              kind: 'delivery_receipt',
+              from: selfId,
+              messageId: env.messageId,
+              at: Date.now(),
+            });
+          }
           if (groupId && isGroupId(groupId) && isViewingContact(groupId)) {
             const group = groupsRef.current.find((g) => g.id === groupId);
             if (group) {
@@ -953,6 +1556,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             }
           }
         } catch (e) {
+          processedEnvelopeIdsRef.current.delete(env.messageId);
           notifyToast(e instanceof Error ? e.message : 'Failed to download media');
         }
       },
@@ -1043,6 +1647,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [identity]);
 
   useEffect(() => {
+    if (!identity) return;
+    setMessages((prev) => {
+      let next = dedupePendingGroupInviteMessages(prev);
+      const additions: ChatMessage[] = [];
+      for (const inv of groupInvitesRef.current) {
+        if (next.some((m) => m.id === inv.id)) continue;
+        if (inv.fromUserId === identity.userId) continue;
+        if (
+          next.some(
+            (m) =>
+              m.content.kind === 'group_invite' &&
+              m.content.groupId === inv.groupId &&
+              m.contactId === inv.fromUserId &&
+              m.content.status === 'pending',
+          )
+        ) {
+          continue;
+        }
+        additions.push({
+          id: inv.id,
+          contactId: inv.fromUserId,
+          direction: 'in',
+          content: groupInviteMessageContent(inv),
+          timestamp: inv.timestamp,
+        });
+      }
+      if (!additions.length && next.length === prev.length) return prev;
+      if (additions.length) next = [...next, ...additions];
+      persist({ messages: next });
+      return next;
+    });
+  }, [identity]);
+
+  useEffect(() => {
     if (!connected) {
       setConnectionPingMs(null);
       return;
@@ -1082,7 +1720,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!appLockEnabled) return;
 
     let lockTimer: number | null = null;
-    const lock = () => setAppUnlocked(false);
+    const lock = () => {
+      if (activeUploadsRef.current.size > 0) return;
+      setAppUnlocked(false);
+    };
 
     const onVisibility = () => {
       if (lockTimer) {
@@ -1157,25 +1798,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return true;
     }
     if (viaBiometric) {
-      const unlocked = await unlockStateStorageWithBiometricKey();
-      if (!unlocked) return false;
+      if (!isCapacitor()) return false;
+      const auth = await authenticateBiometric('Unlock Chat2Chat', 'unlock');
+      if (!auth.success) return false;
+      const unlocked = await unlockStorageAfterBiometricAuth();
+      if (!unlocked && isStateStorageLocked()) return false;
       hydrateFromStorage();
       setAppUnlocked(true);
       return true;
     }
     const ok = verifyAppLockPassword(password);
     if (!ok) return false;
-    const unlocked = await unlockStateStorage(password);
-    if (!unlocked) return false;
-    hydrateFromStorage();
+
+    if (!isStateStorageLocked()) {
+      setAppUnlocked(true);
+      return true;
+    }
+
     setAppUnlocked(true);
+    const unlocked = await unlockStateStorage(password);
+    if (!unlocked) {
+      setAppUnlocked(false);
+      return false;
+    }
+    hydrateFromStorage();
+    if (loadAppLockPreferences().faceIdEnabled) {
+      void storeBiometricUnlockKey();
+    }
     return true;
   }, [appLockEnabled, hydrateFromStorage]);
 
-  const enableAppLock = useCallback(async (password: string, pinLength: AppLockPinLength = 4) => {
-    const err = validateAppLockPassword(password, pinLength);
+  const enableAppLock = useCallback(async (password: string, passcodeType: AppLockPasscodeType = '4') => {
+    const err = validateAppLockPasscode(password, passcodeType);
     if (err) throw new Error(err);
-    saveAppLockPassword(password, pinLength);
+    saveAppLockPassword(password, passcodeType);
     const stored = loadStoredAppLock();
     if (stored) await enablePinStateEncryption(password, stored.salt);
     if (loadAppLockPreferences().faceIdEnabled) {
@@ -1185,12 +1841,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setAppUnlocked(true);
   }, []);
 
-  const changeAppLockPassword = useCallback(async (current: string, next: string, pinLength?: AppLockPinLength) => {
+  const changeAppLockPassword = useCallback(async (current: string, next: string, passcodeType?: AppLockPasscodeType) => {
     if (!verifyAppLockPassword(current)) throw new Error('Wrong PIN');
-    const length = pinLength ?? next.length;
-    const err = validateAppLockPassword(next, length as AppLockPinLength);
+    const type = passcodeType ?? loadAppLockPasscodeType();
+    const err = validateAppLockPasscode(next, type);
     if (err) throw new Error(err);
-    saveAppLockPassword(next, length as AppLockPinLength);
+    saveAppLockPassword(next, type);
     const stored = loadStoredAppLock();
     if (stored) await rekeyStateStorage(next, stored.salt);
     if (loadAppLockPreferences().faceIdEnabled) {
@@ -1216,6 +1872,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [appLockEnabled]);
 
+  const resetAppLockViaBackupRecovery = useCallback(async () => {
+    await clearBiometricUnlockKey();
+    await disablePinStateEncryption();
+    clearAppLock();
+    setAppLockEnabled(false);
+    setAppUnlocked(true);
+  }, []);
+
   const storeIdentity = (id: Identity) => {
     setIdentity(id);
     identityRef.current = id;
@@ -1227,6 +1891,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       throw new Error('Create account is only available on phone');
     }
     const id = generateIdentity(12);
+    ensureAccountCreatedAt();
     storeIdentity(id);
     return id;
   }, []);
@@ -1239,7 +1904,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const addContact = useCallback((userId: string, alias: string): boolean => {
     if (!userId.startsWith('c2c_')) return false;
-    const contact = buildContact(userId, alias.trim() || 'New contact', false);
+    const selfId = identityRef.current?.userId;
+    if (selfId && userId === selfId) return false;
+    if (isSavedMessagesId(userId)) return false;
+    const trimmed = alias.trim();
+    const isUnknown = !trimmed;
+    const contact = buildContact(userId, trimmed || UNKNOWN_CONTACT_ALIAS, isUnknown);
     if (!contact) return false;
     let added = false;
     setContacts((prev) => {
@@ -1255,7 +1925,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const renameContact = useCallback((userId: string, alias: string) => {
     const trimmed = alias.trim();
     if (!trimmed) return;
+    if (isSavedMessagesId(userId)) return;
     setContacts((prev) => {
+      const target = prev.find((c) => c.userId === userId);
+      if (target && isSavedMessagesContact(target)) return prev;
       const next = prev.map((c) =>
         c.userId === userId
           ? { ...c, alias: trimmed, isUnknown: false, avatar: initials(trimmed) }
@@ -1266,8 +1939,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const skipContactNaming = useCallback((userId: string) => {
+    setContacts((prev) => {
+      const next = prev.map((c) =>
+        c.userId === userId
+          ? { ...c, isUnknown: false, alias: truncateUserId(userId), avatar: '?' }
+          : c,
+      );
+      persist({ contacts: next });
+      return next;
+    });
+  }, []);
+
   const finishOnboarding = useCallback(() => {
     persist({ onboardingDone: true });
+    ensureAccountCreatedAt();
     const id = identityRef.current ?? identity;
     if (id) void connectWithBestRelay(id);
     const pending = sessionStorage.getItem('pending-add-contact');
@@ -1293,6 +1979,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const deleteChat = useCallback((contactId: string) => {
+    if (isSavedMessagesId(contactId)) return;
+
     let removedIds: string[] = [];
     setMessages((prev) => {
       removedIds = prev.filter((m) => m.contactId === contactId).map((m) => m.id);
@@ -1313,10 +2001,148 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return next;
       });
     }
-    if (removedIds.length) void deleteCachedMediaBlobs(removedIds);
+    if (removedIds.length) {
+      void deleteCachedMediaBlobs(removedIds);
+      void deleteCachedVideoThumbs(removedIds);
+    }
     if (activeChatContactIdRef.current === contactId) {
       activeChatContactIdRef.current = null;
     }
+  }, []);
+
+  const clearChatMessages = useCallback((contactId: string) => {
+    let removedIds: string[] = [];
+    setMessages((prev) => {
+      removedIds = prev.filter((m) => m.contactId === contactId).map((m) => m.id);
+      const next = prev.filter((m) => m.contactId !== contactId);
+      persist({ messages: next });
+      return next;
+    });
+    if (removedIds.length) {
+      void deleteCachedMediaBlobs(removedIds);
+      void deleteCachedVideoThumbs(removedIds);
+    }
+  }, []);
+
+  const setContactNote = useCallback((userId: string, note: string) => {
+    const trimmed = note.trim();
+    setContacts((prev) => {
+      const next = prev.map((c) =>
+        c.userId === userId ? { ...c, note: trimmed || undefined } : c,
+      );
+      persist({ contacts: next });
+      return next;
+    });
+  }, []);
+
+  const setContactAvatar = useCallback((userId: string, avatar: string) => {
+    const nextAvatar = avatar.trim();
+    if (!nextAvatar || isSavedMessagesId(userId) || isGroupId(userId)) return;
+    setContacts((prev) => {
+      const next = prev.map((c) => (c.userId === userId ? { ...c, avatar: nextAvatar } : c));
+      persist({ contacts: next });
+      return next;
+    });
+  }, []);
+
+  const deleteMessage = useCallback((messageId: string) => {
+    const target = messagesRef.current.find((m) => m.id === messageId);
+    if (!target || !isSavedMessagesId(target.contactId)) return;
+    setMessages((prev) => {
+      const next = prev.filter((m) => m.id !== messageId);
+      persist({ messages: next });
+      return next;
+    });
+    void deleteCachedMediaBlobs([messageId]);
+    void deleteCachedVideoThumbs([messageId]);
+  }, []);
+
+  const blockContact = useCallback((userId: string) => {
+    setContacts((prev) => {
+      const next = prev.map((c) => (c.userId === userId ? { ...c, blocked: true } : c));
+      persist({ contacts: next });
+      return next;
+    });
+  }, []);
+
+  const unblockContact = useCallback((userId: string) => {
+    setContacts((prev) => {
+      const next = prev.map((c) => (c.userId === userId ? { ...c, blocked: false } : c));
+      persist({ contacts: next });
+      return next;
+    });
+  }, []);
+
+  const sendChatPrivacyControl = useCallback(async (contactId: string, blocked: boolean, at?: number) => {
+    const id = identityRef.current ?? identity;
+    if (!id || isGroupId(contactId)) return;
+    const messageId = randomId();
+    const control: ChatPrivacyControlPayload = blocked
+      ? { kind: 'chat_export_block', from: id.userId, at: at ?? Date.now() }
+      : { kind: 'chat_export_allow', from: id.userId };
+    const bytes = encodeChatPrivacyControl(control);
+
+    if (isDesktopShell() && settingsRef.current.desktopLinked) {
+      await sendRelayViaPhone(contactId, messageId, bytesToBase64(bytes));
+      return;
+    }
+
+    let transport = transportRef.current;
+    if (!transport?.isConnected()) {
+      try {
+        const relay = await pickRelayUrls(relayRef.current);
+        relayRef.current = relay;
+        connectTransport(id, relay);
+        transport = transportRef.current;
+        await transport?.connect();
+      } catch {
+        /* relay offline */
+      }
+    }
+    if (transport?.isConnected()) {
+      const wire = await encryptOutgoingMessage(contactId, bytes);
+      transport.sendRaw(contactId, messageId, wire);
+    }
+  }, [identity]);
+
+  const setContactExportBlocked = useCallback((userId: string, exportBlocked: boolean): boolean => {
+    const id = identityRef.current ?? identity;
+    if (!id || isGroupId(userId)) return false;
+
+    if (exportBlocked) {
+      const at = Date.now();
+      const byAlias = ownSenderAlias(contactsRef.current, id.userId);
+      setContacts((prev) => {
+        const next = prev.map((c) =>
+          c.userId === userId ? { ...c, exportBlockForPeerAt: at } : c,
+        );
+        persist({ contacts: next });
+        return next;
+      });
+      void sendChatPrivacyControl(userId, true, at);
+      pushExportBlockNotice(userId, id.userId, byAlias, 'out');
+      void syncExportBlockVault();
+      return true;
+    }
+
+    const contact = contactsRef.current.find((c) => c.userId === userId);
+    if (!contact?.exportBlockForPeerAt) return false;
+    if (!canDisableExportBlockForPeer(contact.exportBlockForPeerAt)) return false;
+
+    setContacts((prev) => {
+      const next = prev.map((c) =>
+        c.userId === userId ? { ...c, exportBlockForPeerAt: undefined } : c,
+      );
+      persist({ contacts: next });
+      return next;
+    });
+    void sendChatPrivacyControl(userId, false);
+    void syncExportBlockVault();
+    return true;
+  }, [identity, pushExportBlockNotice, sendChatPrivacyControl, syncExportBlockVault]);
+
+  const isContactBlocked = useCallback((userId: string) => {
+    return contactsRef.current.some((c) => c.userId === userId && c.blocked);
   }, []);
 
   const getGroup = useCallback(
@@ -1347,7 +2173,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return next;
       });
 
-      const senderAlias = ownSenderAlias(contactsRef.current, id.userId);
+      const senderAlias = ownSenderDisplayName();
       for (const memberId of invited) {
         const invite: GroupInvite = {
           id: randomId(),
@@ -1367,6 +2193,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           kind: 'group_invite',
           invite,
           from: id.userId,
+        });
+        pushMessage({
+          id: invite.id,
+          contactId: memberId,
+          direction: 'out',
+          content: groupInviteMessageContent(invite),
+          timestamp: invite.timestamp,
         });
       }
     },
@@ -1407,6 +2240,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         invite,
         from: id.userId,
       });
+      pushMessage({
+        id: invite.id,
+        contactId: userId,
+        direction: 'out',
+        content: groupInviteMessageContent(invite),
+        timestamp: invite.timestamp,
+      });
     },
     [fanOutControl, identity],
   );
@@ -1418,6 +2258,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const invite = groupInvites.find((inv) => inv.id === inviteId);
       if (!invite || invite.status !== 'pending') return;
 
+      updateGroupInviteMessageStatus(inviteId, 'accepted');
       setGroupInvites((prev) => {
         const next = prev.map((inv) =>
           inv.id === inviteId ? { ...inv, status: 'accepted' as const } : inv,
@@ -1477,7 +2318,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         from: id.userId,
       });
     },
-    [fanOutControl, groupInvites, identity],
+    [fanOutControl, groupInvites, identity, updateGroupInviteMessageStatus],
   );
 
   const declineGroupInvite = useCallback(
@@ -1486,6 +2327,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!id) return;
       const invite = groupInvites.find((inv) => inv.id === inviteId);
       if (!invite) return;
+      updateGroupInviteMessageStatus(inviteId, 'declined');
       setGroupInvites((prev) => {
         const next = prev.map((inv) =>
           inv.id === inviteId ? { ...inv, status: 'declined' as const } : inv,
@@ -1507,7 +2349,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         from: id.userId,
       });
     },
-    [fanOutControl, groupInvites, identity],
+    [fanOutControl, groupInvites, identity, updateGroupInviteMessageStatus],
   );
 
   const kickFromGroup = useCallback(
@@ -1681,6 +2523,62 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const markEphemeralClosed = useCallback(
+    (messageId: string) => {
+      const message = messagesRef.current.find((m) => m.id === messageId);
+      if (!message) return;
+
+      const ids = new Set<string>([messageId]);
+      const content = message.content;
+      if ((content.kind === 'image' || content.kind === 'video') && content.mediaGroupId) {
+        for (const m of messagesRef.current) {
+          if (m.contactId !== message.contactId) continue;
+          const c = m.content;
+          if (
+            (c.kind === 'image' || c.kind === 'video') &&
+            c.mediaGroupId === content.mediaGroupId &&
+            !c.expiredPlaceholder
+          ) {
+            ids.add(m.id);
+          }
+        }
+      }
+
+      for (const id of ids) {
+        const msg = messagesRef.current.find((m) => m.id === id);
+        if (!msg || msg.direction !== 'in') continue;
+        const c = msg.content;
+        if (c.kind !== 'image' && c.kind !== 'video') continue;
+        if (!c.ephemeral || c.ephemeral.mode !== 'after_view') continue;
+        if (c.expiredPlaceholder) continue;
+        void deleteCachedMediaBlobs([id]);
+        void deleteCachedVideoThumbs([id]);
+        patchMessage(id, {
+          expiredPlaceholder: true,
+          previewUrl: undefined,
+          ephemeral: undefined,
+        });
+      }
+    },
+    [patchMessage],
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      for (const message of messagesRef.current) {
+        if (message.direction !== 'in' && message.direction !== 'out') continue;
+        const content = message.content;
+        if (content.kind !== 'image' && content.kind !== 'video') continue;
+        if (!content.ephemeral || content.ephemeral.mode !== 'timer') continue;
+        if (now - message.timestamp >= content.ephemeral.ttlSec * 1000) {
+          purgeMessage(message.id);
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [purgeMessage]);
+
   const dismissNotification = useCallback((notifId: string) => {
     setNotifications((prev) => {
       const next = prev.filter((n) => n.id !== notifId);
@@ -1699,23 +2597,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const sendGroupText = useCallback(
-    async (groupId: string, body: string) => {
+    async (groupId: string, body: string, replyTo?: MessageReplyRef) => {
       const id = identityRef.current ?? identity;
       const group = groupsRef.current.find((g) => g.id === groupId);
       if (!id || !group || !group.memberIds.includes(id.userId)) return;
 
       const messageId = randomId();
-      const senderAlias = ownSenderAlias(contactsRef.current, id.userId);
+      const senderAlias = ownSenderDisplayName();
       const bytes = encodeGroupMessagePayload(
         { kind: 'text', body },
-        { from: id.userId, senderAlias, groupId, client: clientVersionRef.current },
+        { from: id.userId, senderAlias, groupId, client: clientVersionRef.current, replyTo },
       );
 
+      pushMessage({
+        id: messageId,
+        contactId: groupId,
+        direction: 'out',
+        senderId: id.userId,
+        senderAlias,
+        content: { kind: 'text', body },
+        replyTo,
+        timestamp: Date.now(),
+        pendingDelivery: false,
+      });
+
+      let delivered = false;
       if (isDesktopShell() && settingsRef.current.desktopLinked) {
         for (const memberId of group.memberIds) {
           if (memberId === id.userId) continue;
           await sendRelayViaPhone(memberId, randomId(), bytesToBase64(bytes));
         }
+        delivered = true;
       } else {
         const transport = await ensureTransportReady();
         if (transport?.isConnected()) {
@@ -1725,20 +2637,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const wire = await encryptOutgoingMessage(memberId, bytes);
             transport.sendRaw(memberId, memberMessageId, wire);
           }
+          delivered = true;
         }
       }
 
-      pushMessage({
-        id: messageId,
-        contactId: groupId,
-        direction: 'out',
-        senderId: id.userId,
-        senderAlias,
-        content: { kind: 'text', body },
-        timestamp: Date.now(),
-      });
+      if (!delivered) {
+        updateMessageMeta(messageId, { pendingDelivery: true });
+      }
     },
-    [ensureTransportReady, identity],
+    [ensureTransportReady, identity, updateMessageMeta],
   );
 
   const setCallSignalHandler = useCallback(
@@ -1777,23 +2684,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [identity]);
 
-  const sendText = useCallback(async (contactId: string, body: string) => {
+  const sendText = useCallback(async (contactId: string, body: string, replyTo?: MessageReplyRef) => {
     if (isGroupId(contactId)) {
-      await sendGroupText(contactId, body);
+      await sendGroupText(contactId, body, replyTo);
       return;
     }
     const id = identityRef.current ?? identity;
     if (!id) return;
+    if (contactId === id.userId) {
+      notifyToast("You can't message yourself");
+      return;
+    }
+    if (isContactBlocked(contactId)) {
+      notifyToast('Unblock this contact to send messages');
+      return;
+    }
     const messageId = randomId();
+    if (isSavedMessagesId(contactId)) {
+      pushMessage({
+        id: messageId,
+        contactId,
+        direction: 'out',
+        content: { kind: 'text', body },
+        replyTo,
+        timestamp: Date.now(),
+      });
+      return;
+    }
 
     if (isDesktopShell() && settingsRef.current.desktopLinked) {
-      const bytes = encodePayload({ kind: 'text', body, from: id.userId }, clientVersionRef.current);
+      const bytes = encodePayload(
+        { kind: 'text', body, from: id.userId, senderAlias: ownSenderDisplayName(), replyTo },
+        clientVersionRef.current,
+      );
       await sendRelayViaPhone(contactId, messageId, bytesToBase64(bytes));
       pushMessage({
         id: messageId,
         contactId,
         direction: 'out',
         content: { kind: 'text', body },
+        replyTo,
         timestamp: Date.now(),
       });
       return;
@@ -1811,19 +2741,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
         /* relay offline */
       }
     }
+    let delivered = false;
     if (transport?.isConnected()) {
-      const payload = encodePayload({ kind: 'text', body, from: id.userId }, clientVersionRef.current);
+      const payload = encodePayload(
+        { kind: 'text', body, from: id.userId, senderAlias: ownSenderDisplayName(), replyTo },
+        clientVersionRef.current,
+      );
       const wire = await encryptOutgoingMessage(contactId, payload);
       transport.sendRaw(contactId, messageId, wire);
+      delivered = true;
     }
     pushMessage({
       id: messageId,
       contactId,
       direction: 'out',
       content: { kind: 'text', body },
+      replyTo,
       timestamp: Date.now(),
+      ...deliveryMetaForSend(delivered),
     });
-  }, [identity, sendGroupText]);
+  }, [identity, sendGroupText, isContactBlocked]);
 
   const cancelUpload = useCallback((messageId: string) => {
     const entry = activeUploadsRef.current.get(messageId);
@@ -1842,12 +2779,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
       notifyToast('Sign in to send media');
       return;
     }
+    if (!isGroupId(contactId) && isContactBlocked(contactId)) {
+      notifyToast('Unblock this contact to send messages');
+      return;
+    }
 
     const isFile = isFilePick(picked);
     const isVideo = isVideoPick(picked);
     const isVoice = isVoicePick(picked);
     const messageId = randomId();
     const previewUrl = quickPreviewForSend(picked, isFile, isVideo, isVoice);
+    let ephemeral = picked.ephemeral ?? undefined;
+    if (ephemeral && !ephemeralSendAllowed(contactId)) {
+      ephemeral = undefined;
+    }
+    const caption = picked.caption?.trim() || undefined;
+    const mediaGroup = mediaGroupWireFieldsFromPick(picked);
+    const group = isGroupId(contactId) ? groupsRef.current.find((g) => g.id === contactId) : undefined;
+    const senderAlias = group
+      ? ownSenderAlias(contactsRef.current, id.userId)
+      : ownSenderDisplayName();
+
+    if (ephemeral?.mode === 'timer') {
+      let online = transportRef.current?.isConnected() ?? false;
+      if (!online) {
+        try {
+          const transport = await ensureTransportReady();
+          online = transport?.isConnected() ?? false;
+        } catch {
+          online = false;
+        }
+      }
+      if (!online) {
+        notifyToast('Timer videos require an internet connection');
+        return;
+      }
+    }
 
     if (!previewUrl && !isFile && !isVoice) {
       notifyToast('Could not show media');
@@ -1858,37 +2825,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
       picked.file.name?.trim() ||
       (isFile ? 'file.bin' : isVoice ? 'voice.m4a' : isVideo ? 'video.mp4' : 'photo.jpg');
 
+    const sentAt = Date.now();
     activeUploadsRef.current.set(messageId, { aborted: false });
+
+    if (picked.nativePath && isCapacitor() && (isFile || isVideo)) {
+      void persistOutgoingMedia({
+        messageId,
+        mime: picked.mime,
+        nativePath: picked.nativePath,
+        expectedSize: picked.nativeSize,
+      }).catch(() => {
+        /* full bytes cached after prepare */
+      });
+    }
 
     pushMessage({
       id: messageId,
       contactId,
       direction: 'out',
+      ...(group ? { senderId: id.userId, senderAlias } : {}),
       content: isVoice
         ? {
             kind: 'voice',
             blobId: 'local',
             mime: picked.mime,
             fileName: placeholderName,
-            size: picked.data?.length ?? 0,
+            size: picked.data?.length ?? picked.nativeSize ?? 0,
             fileKey: '',
             digest: '',
             durationMs: picked.durationMs,
             previewUrl,
             uploading: true,
+            ...(ephemeral ? { ephemeral } : {}),
+            ...(mediaGroup ?? {}),
+            ...(caption ? { caption } : {}),
           }
         : {
             kind: isFile ? 'file' : isVideo ? 'video' : 'image',
             blobId: 'local',
             mime: picked.mime,
             fileName: placeholderName,
-            size: picked.data?.length ?? 0,
+            size: picked.data?.length ?? picked.nativeSize ?? 0,
             fileKey: '',
             digest: '',
             previewUrl,
             uploading: true,
+            ...(ephemeral ? { ephemeral } : {}),
+            ...(mediaGroup ?? {}),
+            ...(caption ? { caption } : {}),
           },
-      timestamp: Date.now(),
+      timestamp: sentAt,
+      deliveryStatus: 'pending',
     });
 
     const isAborted = () => activeUploadsRef.current.get(messageId)?.aborted === true;
@@ -1896,9 +2883,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!isVoice) {
       void enrichOutgoingPreview(picked, isFile, isVideo).then((enriched) => {
         if (isAborted()) return;
-        if (enriched) patchMessage(messageId, { previewUrl: enriched });
+        if (enriched && isVideoFramePreview(enriched)) {
+          void persistVideoThumbPreview(messageId, enriched);
+          patchMessage(messageId, { previewUrl: enriched });
+        }
       });
     }
+
+    const reportPrepareProgress = (pct: number) => {
+      if (isAborted()) return;
+      patchMessage(messageId, { uploadProgress: pct }, { persist: false });
+    };
 
     try {
       const preparePayload = async () => {
@@ -1912,23 +2907,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           };
         }
         if (isFile) {
-          if (!picked.data?.length) throw new Error('Could not read file');
-          return {
-            data: picked.data,
-            mime: picked.mime === 'application/octet-stream' ? 'application/octet-stream' : picked.mime,
-            fileName: placeholderName,
-          };
+          return prepareFileForSend(picked, reportPrepareProgress);
         }
         if (isVideo) {
-          if (!picked.data?.length) throw new Error('Could not read video');
-          const fileName = picked.file.name?.trim() || placeholderName;
-          return {
-            data: picked.data,
-            mime: picked.mime,
-            fileName,
-          };
+          return prepareVideoForSend(picked, reportPrepareProgress, picked.sendQuality ?? 'compressed');
         }
-        return prepareImageForSend(picked);
+        return prepareImageForSend(picked, picked.sendQuality ?? 'compressed');
       };
 
       const ensureTransport = async () => {
@@ -1937,13 +2921,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try {
           const relay = await pickRelayUrls(relayRef.current);
           relayRef.current = relay;
-          connectTransport(id, relay);
-          transport = transportRef.current;
+          if (!transport) {
+            connectTransport(id, relay);
+            transport = transportRef.current;
+          }
           await transport?.connect();
         } catch {
           /* relay offline */
         }
-        return transport;
+        return transportRef.current;
       };
 
       const [{ data, mime, fileName }, transport] = await Promise.all([
@@ -1958,9 +2944,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       patchMessage(messageId, { mime, fileName, size: data.length, uploadProgress: 8 }, { persist: false });
 
-      if (isVideo || (!isFile && !isVoice)) {
+      if (!isVoice) {
         try {
-          await cacheDecryptedMedia(messageId, data, mime);
+          if (picked.nativePath && isCapacitor() && (isFile || isVideo)) {
+            await persistOutgoingMedia({
+              messageId,
+              mime,
+              data,
+              nativePath: picked.nativePath,
+              expectedSize: data.length,
+            });
+          } else {
+            await cacheDecryptedMedia(messageId, data, mime);
+          }
         } catch {
           /* still try to send */
         }
@@ -1974,7 +2970,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return;
         }
         patchMessage(messageId, { uploading: false });
-        notifyToast('Saved on this device — not connected to server');
+        updateMessageMeta(messageId, { pendingDelivery: true });
+        notifyToast('No connection — will send when online');
         activeUploadsRef.current.delete(messageId);
         return;
       }
@@ -1990,22 +2987,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setProgress(12);
 
       const blobId = WebMedia.blobId();
-      const group = isGroupId(contactId) ? groupsRef.current.find((g) => g.id === contactId) : undefined;
-      const senderAlias = group ? ownSenderAlias(contactsRef.current, id.userId) : undefined;
       const sendParams = {
         messageId,
         blobId,
         data,
         mime,
         fileName,
+        sentAt,
         ...(isVoice && picked.durationMs != null ? { durationMs: picked.durationMs } : {}),
-        ...(group ? { groupId: contactId, senderAlias } : {}),
+        ...(group ? { groupId: contactId } : {}),
+        ...(senderAlias ? { senderAlias } : {}),
+        ...(ephemeral ? { ephemeral } : {}),
+        ...(mediaGroup ?? {}),
+        ...(caption ? { caption } : {}),
         onPhase: (phase: 'encrypt' | 'upload', percent: number) => {
           if (phase === 'encrypt') {
-            setProgress(12 + (percent / 100) * 8);
+            setProgress(5 + (percent / 100) * 25);
             return;
           }
-          setProgress(20 + (percent / 100) * 75);
+          setProgress(30 + (percent / 100) * 65);
         },
       };
 
@@ -2039,35 +3039,234 @@ export function AppProvider({ children }: { children: ReactNode }) {
         fileKey: meta.fileKey,
         digest: meta.digest,
         ...(meta.durationMs != null ? { durationMs: meta.durationMs } : {}),
-        previewUrl,
+        ...(ephemeral ? { ephemeral } : {}),
+        ...(mediaGroup ?? {}),
+        ...(caption ? { caption } : {}),
         uploading: false,
         uploadProgress: undefined,
       });
+      updateMessageMeta(messageId, { pendingDelivery: false });
       activeUploadsRef.current.delete(messageId);
 
       if (isVideo) {
-        void createVideoBubbleThumbUrl(data, mime, fileName).then((thumb) => {
-          if (thumb && !isAborted()) patchMessage(messageId, { previewUrl: thumb });
-        });
+        void (async () => {
+          let thumb = await createVideoBubbleThumbUrl(data, mime, fileName);
+          if (!thumb || !isVideoFramePreview(thumb)) {
+            const native = await readCachedNativeRef(messageId);
+            if (native?.uri && isIosCapacitor()) {
+              const { Capacitor } = await import('@capacitor/core');
+              thumb = await createVideoBubbleThumbFromUrl(
+                Capacitor.convertFileSrc(native.uri),
+                fileName,
+              );
+            }
+          }
+          if (thumb && isVideoFramePreview(thumb) && !isAborted()) {
+            void persistVideoThumbPreview(messageId, thumb);
+            patchMessage(messageId, { previewUrl: thumb });
+          }
+        })();
       } else if (!isFile && !isVoice) {
         patchMessage(messageId, { previewUrl: createFullImageBlobUrl(data, mime) });
+      } else if (isFile) {
+        void enrichOutgoingPreview({ ...picked, data }, true, false).then((preview) => {
+          if (preview && !isAborted()) patchMessage(messageId, { previewUrl: preview });
+        });
       }
     } catch (e) {
       if (isAborted()) {
         activeUploadsRef.current.delete(messageId);
         return;
       }
-      patchMessage(messageId, { uploading: false, blobId: 'local' });
       activeUploadsRef.current.delete(messageId);
+
+      const cached = await readCachedMediaBytes(messageId).catch(() => null);
+      if (cached?.data.length) {
+        patchMessage(messageId, { uploading: false, uploadProgress: undefined });
+        updateMessageMeta(messageId, { pendingDelivery: true });
+        const msg = e instanceof Error ? e.message : 'Failed to send media';
+        if (/413/.test(msg)) {
+          notifyToast('Upload failed: file too large (server limit)');
+        } else {
+          notifyToast('Will retry send when connection is stable');
+        }
+        return;
+      }
+
+      void deleteCachedMediaBlobs([messageId]);
+      void deleteCachedVideoThumbs([messageId]);
+      purgeMessage(messageId);
       const msg = e instanceof Error ? e.message : 'Failed to send media';
-      // Always show the real error so we can debug it
       if (/413/.test(msg)) {
         notifyToast('Upload failed: file too large (server limit)');
       } else {
         notifyToast(msg.length > 140 ? msg.slice(0, 140) + '…' : msg);
       }
     }
-  }, [identity]);
+  }, [identity, isContactBlocked, purgeMessage, updateMessageMeta, ensureTransportReady]);
+
+  const deliverPendingText = useCallback(
+    async (msg: ChatMessage) => {
+      if (msg.content.kind !== 'text') return;
+      const id = identityRef.current ?? identity;
+      if (!id) return;
+      const transport = transportRef.current;
+      if (!transport?.isConnected()) return;
+
+      if (isGroupId(msg.contactId)) {
+        const group = groupsRef.current.find((g) => g.id === msg.contactId);
+        if (!group) return;
+        const bytes = encodeGroupMessagePayload(
+          { kind: 'text', body: msg.content.body },
+          {
+            from: id.userId,
+            senderAlias: msg.senderAlias ?? ownSenderAlias(contactsRef.current, id.userId),
+            groupId: msg.contactId,
+            client: clientVersionRef.current,
+            replyTo: msg.replyTo,
+          },
+        );
+        for (const memberId of group.memberIds) {
+          if (memberId === id.userId) continue;
+          const wire = await encryptOutgoingMessage(memberId, bytes);
+          transport.sendRaw(memberId, randomId(), wire);
+        }
+      } else {
+        const payload = encodePayload(
+          { kind: 'text', body: msg.content.body, from: id.userId, replyTo: msg.replyTo },
+          clientVersionRef.current,
+        );
+        const wire = await encryptOutgoingMessage(msg.contactId, payload);
+        transport.sendRaw(msg.contactId, msg.id, wire);
+      }
+      updateMessageMeta(msg.id, { pendingDelivery: false });
+    },
+    [identity, updateMessageMeta],
+  );
+
+  const deliverPendingMedia = useCallback(
+    async (msg: ChatMessage) => {
+      const id = identityRef.current ?? identity;
+      if (!id) return;
+      const content = msg.content;
+      if (
+        content.kind !== 'image' &&
+        content.kind !== 'video' &&
+        content.kind !== 'file' &&
+        content.kind !== 'voice'
+      ) {
+        return;
+      }
+      if (content.uploading) return;
+
+      const cached = await readCachedMediaBytes(msg.id);
+      if (!cached?.data.length) return;
+
+      const transport = await ensureTransportReady();
+      if (!transport?.isConnected()) return;
+
+      const media = mediaRef.current;
+      if (!media) return;
+
+      const group = isGroupId(msg.contactId)
+        ? groupsRef.current.find((g) => g.id === msg.contactId)
+        : undefined;
+      const senderAlias = group ? ownSenderAlias(contactsRef.current, id.userId) : undefined;
+
+      patchMessage(msg.id, { uploading: true, uploadProgress: 12 }, { persist: false });
+
+      try {
+        const data = cached.data;
+        const mime = cached.mime || content.mime;
+        const fileName = content.fileName;
+        const blobId = WebMedia.blobId();
+        const ephemeral = 'ephemeral' in content ? content.ephemeral : undefined;
+        const mediaGroup = mediaGroupWireFields(content);
+        const sendParams = {
+          messageId: msg.id,
+          blobId,
+          data,
+          mime,
+          fileName,
+          sentAt: msg.timestamp,
+          ...(content.kind === 'voice' && content.durationMs != null
+            ? { durationMs: content.durationMs }
+            : {}),
+          ...(group ? { groupId: msg.contactId, senderAlias } : {}),
+          ...(ephemeral ? { ephemeral } : {}),
+          ...(mediaGroup ?? {}),
+        };
+
+        let meta;
+        if (group) {
+          let first = true;
+          for (const memberId of group.memberIds) {
+            if (memberId === id.userId) continue;
+            meta = await media.send({
+              recipientId: memberId,
+              ...sendParams,
+              messageId: first ? msg.id : randomId(),
+            });
+            first = false;
+          }
+          if (!meta) throw new Error('Send failed');
+        } else {
+          meta = await media.send({
+            recipientId: msg.contactId,
+            ...sendParams,
+          });
+        }
+
+        patchMessage(msg.id, {
+          kind: meta.kind,
+          blobId: meta.blobId,
+          mime: meta.mime,
+          fileName: meta.fileName,
+          size: meta.size,
+          fileKey: meta.fileKey,
+          digest: meta.digest,
+          ...(meta.durationMs != null ? { durationMs: meta.durationMs } : {}),
+          ...(ephemeral ? { ephemeral } : {}),
+          ...(mediaGroup ?? {}),
+          uploading: false,
+          uploadProgress: undefined,
+        });
+        updateMessageMeta(msg.id, { pendingDelivery: false });
+      } catch {
+        patchMessage(msg.id, { uploading: false, uploadProgress: undefined });
+      }
+    },
+    [ensureTransportReady, identity, updateMessageMeta],
+  );
+
+  const flushingOutboxRef = useRef(false);
+  const flushPendingOutbox = useCallback(async () => {
+    if (flushingOutboxRef.current) return;
+    const transport = await ensureTransportReady();
+    if (!transport?.isConnected()) return;
+
+    const pending = messagesRef.current.filter((m) => m.direction === 'out' && m.pendingDelivery);
+    if (!pending.length) return;
+
+    flushingOutboxRef.current = true;
+    try {
+      for (const msg of pending) {
+        if (msg.content.kind === 'text') {
+          await deliverPendingText(msg);
+        } else {
+          await deliverPendingMedia(msg);
+        }
+      }
+    } finally {
+      flushingOutboxRef.current = false;
+    }
+  }, [deliverPendingMedia, deliverPendingText, ensureTransportReady]);
+
+  useEffect(() => {
+    if (!connected) return;
+    void flushPendingOutbox();
+    void mergeVaultExportBlocks();
+  }, [connected, flushPendingOutbox, mergeVaultExportBlocks]);
 
   const toggleNotifications = useCallback(() => {
     const next = !settings.notificationsEnabled;
@@ -2094,14 +3293,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         userId: id.userId,
         contacts,
         messages,
+        groups,
+        groupInvites,
         settings,
         httpBaseUrl: relayRef.current.http || defaultRelayHttpUrl(),
       });
 
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      return encryptBackupPayload(password, payload, id.userId);
+      const file = encryptBackupPayload(password, payload, id.userId);
+      return { file, exportExcludedChats: payload.exportExcludedChats ?? [] };
     },
-    [identity, contacts, messages, settings],
+    [identity, contacts, messages, groups, groupInvites, settings],
   );
 
   const checkForUpdates = useCallback(() => checkForAppUpdate(), []);
@@ -2125,29 +3327,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
           userId: id.userId,
           contacts,
           messages,
+          groups,
+          groupInvites,
           settings,
           httpBaseUrl: relayRef.current.http || defaultRelayHttpUrl(),
         });
       }
 
       const file = await buildEncryptedBackup(password);
-      return prepareBackupShare(file);
+      return prepareBackupShare(file.file).then((prepared) => ({
+        ...prepared,
+        exportExcludedChats: file.exportExcludedChats,
+      }));
     },
-    [buildEncryptedBackup, identity, contacts, messages, settings],
+    [buildEncryptedBackup, identity, contacts, messages, groups, groupInvites, settings],
   );
 
   const saveBackupDesktop = useCallback(
     async (password: string) => {
-      const file = await buildEncryptedBackup(password);
-      const saveResult = await saveBackupFile(file);
+      const built = await buildEncryptedBackup(password);
+      const saveResult = await saveBackupFile(built.file);
       updateSettings({ lastBackupAt: Date.now() });
-      return saveResult;
+      return { ...saveResult, exportExcludedChats: built.exportExcludedChats };
     },
     [buildEncryptedBackup],
   );
 
   const shareBackup = useCallback(async (prepared: PreparedBackupShare) => {
-    await sharePreparedBackup(prepared);
+    if (!isNativeMobile()) {
+      await sharePreparedBackup(prepared);
+    }
     updateSettings({ lastBackupAt: Date.now() });
   }, []);
 
@@ -2173,6 +3382,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setContacts(payload.contacts);
     setMessages(restoredMessages);
     setSettings(mergedSettings);
+    if (payload.groups?.length) setGroups(payload.groups);
+    if (payload.groupInvites?.length) setGroupInvites(payload.groupInvites);
 
     persist({
       identity: { mnemonic: payload.mnemonic },
@@ -2180,6 +3391,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       messages: restoredMessages,
       settings: mergedSettings,
       onboardingDone: true,
+      ...(payload.groups?.length ? { groups: payload.groups } : {}),
+      ...(payload.groupInvites?.length ? { groupInvites: payload.groupInvites } : {}),
     });
 
     await importBackupMediaToCache(payload.media ?? [], picked);
@@ -2232,6 +3445,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
     onDesktopLinkMessage((frame) => {
+      if (frame.type === 'phone_online') {
+        setPhoneOnline(frame.online);
+        return;
+      }
       if (frame.type !== 'send_relay') return;
       void (async () => {
         const id = identityRef.current;
@@ -2288,7 +3505,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ]);
 
   useEffect(() => {
+    if (!isCapacitor() || !settings.desktopLinked) return;
+    let removeListener: (() => void) | undefined;
+    void import('@capacitor/app').then(({ App }) =>
+      App.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive) {
+          void notifyPhoneLinkOffline();
+          setPhoneOnline(false);
+          return;
+        }
+        const host = settingsRef.current.desktopLinkHost;
+        const token = settingsRef.current.desktopLinkToken;
+        const port = settingsRef.current.desktopLinkPort ?? DESKTOP_LINK_DEFAULT_PORT;
+        if (!host || !token) return;
+        const offer: DesktopLinkOffer = {
+          version: 1,
+          token,
+          host,
+          port,
+          serviceUuid: DESKTOP_LINK_SERVICE_UUID,
+          expiresAt: 0,
+        };
+        void reconnectPhoneToDesktop(offer)
+          .then(() => {
+            setPhoneOnline(true);
+            setDesktopBleConnected(true);
+          })
+          .catch(() => {
+            setPhoneOnline(false);
+            setDesktopBleConnected(false);
+          });
+      }).then((handle) => {
+        removeListener = () => void handle.remove();
+      }),
+    );
+    return () => removeListener?.();
+  }, [settings.desktopLinked, setPhoneOnline]);
+
+  useEffect(() => {
     if (!isDesktopShell() || !settings.desktopLinked) return;
+    setPhoneOnline(false);
     const token = loadDesktopLinkToken() ?? settings.desktopLinkToken;
     if (!token) return;
     const offer: DesktopLinkOffer = {
@@ -2364,8 +3620,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       },
       onPhoneOnline: (online) => {
+        const wasOnline = desktopBleConnectedRef.current;
         setPhoneOnline(online);
         setDesktopBleConnected(online);
+        if (!online && wasOnline) {
+          notifyMessage('Phone disconnected', 'Reconnect your phone to resume messaging.');
+        }
       },
     });
   }, []);
@@ -2378,6 +3638,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       connected,
       connecting,
       connectionPingMs,
+      connectionSnapshot,
+      setConnectionStatusLive,
       uploadSpeedKbps,
       settings,
       createAccount,
@@ -2385,7 +3647,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       finishOnboarding,
       addContact,
       renameContact,
+      setContactAvatar,
+      deleteMessage,
+      skipContactNaming,
       deleteChat,
+      clearChatMessages,
+      setContactNote,
+      blockContact,
+      unblockContact,
+      setContactExportBlocked,
       verifyContact,
       sendText,
       sendCallSignal,
@@ -2393,12 +3663,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       sendMedia,
       cancelUpload,
       getContact: (id) => contacts.find((c) => c.userId === id),
+      getThread,
       copyToClipboard: (t) => navigator.clipboard.writeText(t),
       logout: () => {
         transportRef.current?.disconnect();
         void disconnectPhoneBle();
         void stopDesktopLinkAdvertising({ force: true });
         clearDesktopLinkToken();
+        void clearAllMediaCache();
+        void pruneNonEssentialAppFolderFiles();
         void clearAllStateStorage();
         window.location.href = '/';
       },
@@ -2436,8 +3709,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markNotificationsRead,
       sendGroupText,
       markGroupMessageViewed,
+      markEphemeralClosed,
       dismissNotification,
       chatReadCursors,
+      flashMediaGroupId,
+      signalMediaGroupSent,
       appLockEnabled,
       appUnlocked,
       unlockApp,
@@ -2445,6 +3721,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       changeAppLockPassword,
       disableAppLock,
       lockApp,
+      resetAppLockViaBackupRecovery,
     }),
     [
       identity,
@@ -2456,6 +3733,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       connected,
       connecting,
       connectionPingMs,
+      connectionSnapshot,
+      setConnectionStatusLive,
       uploadSpeedKbps,
       settings,
       createAccount,
@@ -2463,13 +3742,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       finishOnboarding,
       addContact,
       renameContact,
+      setContactAvatar,
+      deleteMessage,
+      skipContactNaming,
       deleteChat,
+      clearChatMessages,
+      setContactNote,
+      blockContact,
+      unblockContact,
+      setContactExportBlocked,
       verifyContact,
       sendText,
       sendCallSignal,
       setCallSignalHandler,
       sendMedia,
       cancelUpload,
+      getThread,
       getGroup,
       createGroup,
       inviteToGroup,
@@ -2483,8 +3771,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markNotificationsRead,
       sendGroupText,
       markGroupMessageViewed,
+      markEphemeralClosed,
       dismissNotification,
       chatReadCursors,
+      flashMediaGroupId,
+      signalMediaGroupSent,
       toggleNotifications,
       setAppearance,
       checkForUpdates,
@@ -2509,6 +3800,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       changeAppLockPassword,
       disableAppLock,
       lockApp,
+      resetAppLockViaBackupRecovery,
     ],
   );
 
@@ -2523,7 +3815,7 @@ export function useApp() {
 }
 
 export function useChatPreviews() {
-  const { contacts, groups, messages, chatReadCursors, notifications } = useApp();
+  const { contacts, groups, getThread, chatReadCursors, notifications } = useApp();
 
   const unreadForChat = (contactId: string, thread: ChatMessage[]) => {
     const readAt = chatReadCursors[contactId] ?? 0;
@@ -2535,11 +3827,12 @@ export function useChatPreviews() {
   };
 
   const contactPreviews = contacts.map((c) => {
-    const thread = messages.filter((m) => m.contactId === c.userId);
+    const thread = getThread(c.userId);
     const last = thread[thread.length - 1];
     return {
       contact: c,
       lastMessage: last ? previewText(last.content) : 'No messages yet',
+      preview: buildMessageListPreview(last),
       timestamp: last?.timestamp ?? 0,
       unread: unreadForChat(c.userId, thread),
       isGroup: false,
@@ -2547,7 +3840,7 @@ export function useChatPreviews() {
   });
 
   const groupPreviews = groups.map((g) => {
-    const thread = messages.filter((m) => m.contactId === g.id);
+    const thread = getThread(g.id);
     const last = thread[thread.length - 1];
     return {
       contact: {
@@ -2558,11 +3851,18 @@ export function useChatPreviews() {
         avatar: g.avatar,
       },
       lastMessage: last ? previewText(last.content) : 'No messages yet',
+      preview: buildMessageListPreview(last),
       timestamp: last?.timestamp ?? g.createdAt,
       unread: unreadForChat(g.id, thread),
       isGroup: true,
     };
   });
 
-  return [...contactPreviews, ...groupPreviews].sort((a, b) => b.timestamp - a.timestamp);
+  const sorted = [...contactPreviews, ...groupPreviews].sort((a, b) => b.timestamp - a.timestamp);
+  const savedIndex = sorted.findIndex((p) => !p.isGroup && isSavedMessagesContact(p.contact));
+  if (savedIndex > 0) {
+    const [saved] = sorted.splice(savedIndex, 1);
+    sorted.unshift(saved);
+  }
+  return sorted;
 }

@@ -1,0 +1,55 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	handle /ws {
+		reverse_proxy relay:3847
+	}
+
+	handle /api/* {
+		reverse_proxy relay:3847
+	}
+
+	handle /blob/* {
+		reverse_proxy relay:3847
+	}
+
+	handle /health {
+		reverse_proxy relay:3847
+	}
+
+	handle_path /altstore/* {
+		root * /srv/altstore
+		@source path /source.json
+		header @source Cache-Control "no-cache, no-store, must-revalidate"
+		header @source Pragma "no-cache"
+		file_server
+	}
+
+	handle / {
+		respond "Chat2Chat relay OK — use /api/v1/health" 200
+	}
+}
+
+{$SITE_DOMAIN}, www.{$SITE_DOMAIN} {
+	encode gzip
+	root * /srv/landing
+
+	@legacyApp path /app /app/*
+	handle @legacyApp {
+		redir /download/ permanent
+	}
+
+	@devDownloads path /downloads/dev /downloads/dev/*
+	handle @devDownloads {
+		respond "Developer builds require email verification — use the download page." 403
+	}
+
+	handle {
+		try_files {path} {path}/index.html /index.html
+		file_server
+	}
+}

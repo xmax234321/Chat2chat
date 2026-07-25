@@ -1,0 +1,19 @@
+{
+  "name": "@chat2chat/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --import tsx src/index.ts"
+  },
+  "dependencies": {
+    "@chat2chat/crypto": "workspace:*",
+    "@chat2chat/protocol": "workspace:*",
+    "@chat2chat/storage": "workspace:*",
+    "@chat2chat/transport": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

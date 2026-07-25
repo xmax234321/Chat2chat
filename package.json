@@ -24,6 +24,8 @@
     "docker:full": "docker compose --profile full up --build -d",
     "deploy:regru": "bash deploy/regru/deploy.sh full",
     "deploy:landing": "bash deploy/regru/deploy-landing.sh",
+    "build:website": "pnpm --filter @chat2chat/website build && pnpm --filter @chat2chat/website sync:landing",
+    "dev:website": "pnpm --filter @chat2chat/website dev",
     "build:site": "bash deploy/scripts/build-site-release.sh",
     "check:info-plist": "bash scripts/check-info-plist-security.sh"
   },

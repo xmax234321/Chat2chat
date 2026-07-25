@@ -1,0 +1,27 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	handle /ws {
+		reverse_proxy relay:3847
+	}
+
+	handle /api/* {
+		reverse_proxy relay:3847
+	}
+
+	handle /blob/* {
+		reverse_proxy relay:3847
+	}
+
+	handle /health {
+		reverse_proxy relay:3847
+	}
+
+	handle / {
+		respond "Chat2Chat relay OK — use /api/v1/health" 200
+	}
+}
