@@ -129,7 +129,8 @@ SSH="sshpass -p \"$VPS_PASSWORD\" ssh -o StrictHostKeyChecking=no ${VPS_USER}@${
 RSYNC="sshpass -p \"$VPS_PASSWORD\" rsync -az"
 
 echo "==> Сборка сайта + downloads + altstore..."
-pnpm --dir "$REPO_ROOT" build:website
+cd "$REPO_ROOT"
+pnpm build:website
 bash "$REPO_ROOT/deploy/scripts/build-site-release.sh"
 
 if [[ -f "$REPO_ROOT/deploy/altstore/versions.manifest.json" ]]; then
@@ -158,15 +159,21 @@ rsync_with_auth \
 rsync_with_auth \
   "$REPO_ROOT/packages/protocol/" "${VPS_USER}@${VPS_HOST}:${APP_DIR}/packages/protocol/" \
   --exclude node_modules --exclude dist
+rsync_with_auth \
+  "$REPO_ROOT/packages/crypto/" "${VPS_USER}@${VPS_HOST}:${APP_DIR}/packages/crypto/" \
+  --exclude node_modules --exclude dist
 for f in package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json; do
   rsync_with_auth "$REPO_ROOT/$f" "${VPS_USER}@${VPS_HOST}:${APP_DIR}/$f"
 done
 
 SMTP_FROM="${SMTP_FROM:-no-reply@chat2chat.org}"
 SMTP_USER="${SMTP_USER:-no-reply@chat2chat.org}"
+MIN_CLIENT_VERSION="${MIN_CLIENT_VERSION:-1.5.3}"
+MIN_CLIENT_BUILD="${MIN_CLIENT_BUILD:-57}"
+ENFORCE_MIN_CLIENT_VERSION="${ENFORCE_MIN_CLIENT_VERSION:-true}"
 
 echo "==> Обновление .env, rebuild relay и перезапуск Caddy..."
-REMOTE_CMD="set -euo pipefail; cd ${APP_DIR}/deploy/regru; touch .env; grep -q '^SITE_DOMAIN=' .env && sed -i 's/^SITE_DOMAIN=.*/SITE_DOMAIN=${SITE_DOMAIN}/' .env || echo SITE_DOMAIN=${SITE_DOMAIN} >> .env; grep -q '^DOMAIN=' .env || echo DOMAIN=${DOMAIN} >> .env; grep -q '^ACME_EMAIL=' .env || echo ACME_EMAIL=${ACME_EMAIL} >> .env; grep -q '^SMTP_HOST=' .env || echo SMTP_HOST=smtp.mail.ru >> .env; grep -q '^SMTP_PORT=' .env || echo SMTP_PORT=465 >> .env; grep -q '^SMTP_SECURE=' .env || echo SMTP_SECURE=true >> .env; sed -i 's/^SMTP_FROM=.*/SMTP_FROM=${SMTP_FROM}/' .env || echo SMTP_FROM=${SMTP_FROM} >> .env; sed -i 's/^SMTP_USER=.*/SMTP_USER=${SMTP_USER}/' .env || echo SMTP_USER=${SMTP_USER} >> .env"
+REMOTE_CMD="set -euo pipefail; cd ${APP_DIR}/deploy/regru; touch .env; grep -q '^SITE_DOMAIN=' .env && sed -i 's/^SITE_DOMAIN=.*/SITE_DOMAIN=${SITE_DOMAIN}/' .env || echo SITE_DOMAIN=${SITE_DOMAIN} >> .env; grep -q '^DOMAIN=' .env || echo DOMAIN=${DOMAIN} >> .env; grep -q '^ACME_EMAIL=' .env || echo ACME_EMAIL=${ACME_EMAIL} >> .env; grep -q '^SMTP_HOST=' .env || echo SMTP_HOST=smtp.mail.ru >> .env; grep -q '^SMTP_PORT=' .env || echo SMTP_PORT=465 >> .env; grep -q '^SMTP_SECURE=' .env || echo SMTP_SECURE=true >> .env; sed -i 's/^SMTP_FROM=.*/SMTP_FROM=${SMTP_FROM}/' .env || echo SMTP_FROM=${SMTP_FROM} >> .env; sed -i 's/^SMTP_USER=.*/SMTP_USER=${SMTP_USER}/' .env || echo SMTP_USER=${SMTP_USER} >> .env; grep -q '^MIN_CLIENT_VERSION=' .env && sed -i 's/^MIN_CLIENT_VERSION=.*/MIN_CLIENT_VERSION=${MIN_CLIENT_VERSION}/' .env || echo MIN_CLIENT_VERSION=${MIN_CLIENT_VERSION} >> .env; grep -q '^MIN_CLIENT_BUILD=' .env && sed -i 's/^MIN_CLIENT_BUILD=.*/MIN_CLIENT_BUILD=${MIN_CLIENT_BUILD}/' .env || echo MIN_CLIENT_BUILD=${MIN_CLIENT_BUILD} >> .env; grep -q '^ENFORCE_MIN_CLIENT_VERSION=' .env && sed -i 's/^ENFORCE_MIN_CLIENT_VERSION=.*/ENFORCE_MIN_CLIENT_VERSION=${ENFORCE_MIN_CLIENT_VERSION}/' .env || echo ENFORCE_MIN_CLIENT_VERSION=${ENFORCE_MIN_CLIENT_VERSION} >> .env; grep -q '^MAX_BLOB_SIZE=' .env && sed -i 's/^MAX_BLOB_SIZE=.*/MAX_BLOB_SIZE=104857600/' .env || echo MAX_BLOB_SIZE=104857600 >> .env; grep -q '^CORS_ORIGIN=' .env && sed -i 's/^CORS_ORIGIN=.*/CORS_ORIGIN=https:\\/\\/chat2chat.org,https:\\/\\/app.chat2chat.org,capacitor:\\/\\/localhost/' .env || echo 'CORS_ORIGIN=https://chat2chat.org,https://app.chat2chat.org,capacitor://localhost' >> .env"
 if [[ -n "${SMTP_PASS:-}" ]]; then
   REMOTE_CMD="${REMOTE_CMD}; sed -i 's/^SMTP_PASS=.*/SMTP_PASS=${SMTP_PASS}/' .env || echo SMTP_PASS=${SMTP_PASS} >> .env"
 fi

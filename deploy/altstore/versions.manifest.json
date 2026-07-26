@@ -1,11 +1,30 @@
 {
   "channel": "public",
-  "latest": "1.5.2",
+  "latest": "1.5.3",
   "minSupported": {
-    "version": "1.5",
-    "buildVersion": "52"
+    "version": "1.5.3",
+    "buildVersion": "57"
   },
   "versions": [
+    {
+      "version": "1.5.3",
+      "buildVersion": "57",
+      "channel": "public",
+      "label": "Chat2Chat",
+      "ipaFile": "Chat2Chat-1.5.3-build57.ipa",
+      "date": "2026-07-26",
+      "description": "Security release: WS challenge auth, signed blob/vault access, trusted group metadata, relay RAM→disk blob tiering. Required update — older builds are blocked."
+    },
+    {
+      "version": "1.5.2",
+      "buildVersion": "56",
+      "channel": "public",
+      "label": "Chat2Chat",
+      "ipaFile": "Chat2Chat-1.5.2-build56.ipa",
+      "date": "2026-07-26",
+      "deprecated": true,
+      "description": "Messenger polish: reliable button taps, multi-video album sends, stable reconnects, voice messages, delivery ticks, and encrypted server vault for export block."
+    },
     {
       "version": "1.5.2",
       "buildVersion": "54",
@@ -13,6 +32,7 @@
       "label": "Chat2Chat",
       "ipaFile": "Chat2Chat-1.5.2-build54.ipa",
       "date": "2026-07-06",
+      "deprecated": true,
       "description": "Auto-save backups and login files to Files (Backups folder). Entry animation on launch. Toast fixes and smoother recover-from-backup flow."
     },
     {

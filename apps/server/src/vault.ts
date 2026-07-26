@@ -5,7 +5,6 @@ import { config } from './config.js';
 export interface StoredVaultEntry {
   ciphertext: string;
   version: number;
-  auth: string;
   updatedAt: number;
 }
 
@@ -35,29 +34,27 @@ async function persistVaultStore(): Promise<void> {
   await writeFile(vaultFilePath(), JSON.stringify(obj), 'utf8');
 }
 
-export function getUserVault(userId: string, auth: string): StoredVaultEntry | null {
-  const entry = vaultStore.get(userId);
-  if (!entry || entry.auth !== auth) return null;
-  return entry;
+/**
+ * No separate auth secret anymore — ownership of userId is proven per
+ * request by an Ed25519 signature (checked in api.ts before these are
+ * called), so a bare read/write here is safe.
+ */
+export function getUserVault(userId: string): StoredVaultEntry | null {
+  return vaultStore.get(userId) ?? null;
 }
 
 export function putUserVault(
   userId: string,
-  auth: string,
   ciphertext: string,
   version: number,
 ): StoredVaultEntry {
   const existing = vaultStore.get(userId);
-  if (existing && existing.auth !== auth) {
-    throw new Error('Vault auth mismatch');
-  }
   if (existing && version < existing.version) {
     throw new Error('Stale vault version');
   }
   const entry: StoredVaultEntry = {
     ciphertext,
     version,
-    auth,
     updatedAt: Date.now(),
   };
   vaultStore.set(userId, entry);

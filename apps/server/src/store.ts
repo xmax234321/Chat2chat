@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import { encodeWire, type SealedEnvelope, type GroupDeletePolicyWire } from '@chat2chat/protocol';
+import { encodeWire, type SealedEnvelope, type GroupEnvelopeMeta } from '@chat2chat/protocol';
 import { config } from './config.js';
 
 export interface QueuedMessage {
@@ -10,6 +10,15 @@ export interface QueuedMessage {
 export const messageQueue = new Map<string, QueuedMessage>();
 export const connections = new Map<string, Set<WebSocket>>();
 const messageViews = new Map<string, Set<string>>();
+
+/**
+ * Trusted group metadata, keyed by messageId. Populated once, from the
+ * first envelope carrying it that arrives over an authenticated sender
+ * connection (see registerEnvelope below) — never from a viewer's own
+ * view_ack claim. This is what closes the "any single client can force
+ * group-message deletion by lying about memberCount" hole.
+ */
+const groupMetaByMessage = new Map<string, GroupEnvelopeMeta>();
 
 const startedAt = Date.now();
 
@@ -53,6 +62,18 @@ export function deliverToRecipient(recipientId: string, envelope: SealedEnvelope
   return true;
 }
 
+/**
+ * Record trusted group metadata for a message the first time we see it,
+ * from an envelope that arrived over an authenticated sender connection.
+ * Call this once per fan-out send (ws.ts does it for every 'envelope'
+ * frame it relays), it's a no-op after the first call for a given id.
+ */
+export function registerGroupMeta(messageId: string, groupMeta: GroupEnvelopeMeta | undefined): void {
+  if (!groupMeta) return;
+  if (groupMetaByMessage.has(messageId)) return;
+  groupMetaByMessage.set(messageId, groupMeta);
+}
+
 export function enqueue(envelope: SealedEnvelope): void {
   messageQueue.set(queueKey(envelope.recipientId, envelope.messageId), {
     envelope,
@@ -64,7 +85,7 @@ export function dequeue(recipientId: string, messageId: string): boolean {
   return messageQueue.delete(queueKey(recipientId, messageId));
 }
 
-function viewThreshold(memberCount: number, policy: GroupDeletePolicyWire): number {
+function viewThreshold(memberCount: number, policy: GroupEnvelopeMeta['deletePolicy']): number {
   if (policy.mode === 'all') return memberCount;
   if (policy.mode === 'majority') return Math.ceil(memberCount / 2);
   return Math.min(policy.count, memberCount);
@@ -81,21 +102,32 @@ export function dequeueAllForMessage(messageId: string): number {
   return removed;
 }
 
-export function recordMessageView(
-  viewerId: string,
-  messageId: string,
-  memberCount: number,
-  policy: GroupDeletePolicyWire,
-): boolean {
+/**
+ * Record that `viewerId` has viewed `messageId`. memberCount/policy are no
+ * longer accepted from the caller — they're looked up from the trusted
+ * metadata recorded by registerGroupMeta at send time. A viewer who isn't
+ * in the recorded member list is ignored. Messages with no group metadata
+ * (plain 1:1 messages) fall back to a direct per-recipient dequeue.
+ */
+export function recordMessageView(viewerId: string, messageId: string): boolean {
+  const meta = groupMetaByMessage.get(messageId);
+  if (!meta) {
+    dequeue(viewerId, messageId);
+    return true;
+  }
+  if (!meta.memberIds.includes(viewerId)) return false;
+
   let viewers = messageViews.get(messageId);
   if (!viewers) {
     viewers = new Set();
     messageViews.set(messageId, viewers);
   }
   viewers.add(viewerId);
-  const threshold = viewThreshold(memberCount, policy);
+
+  const threshold = viewThreshold(meta.memberIds.length, meta.deletePolicy);
   if (viewers.size >= threshold) {
     messageViews.delete(messageId);
+    groupMetaByMessage.delete(messageId);
     dequeueAllForMessage(messageId);
     return true;
   }

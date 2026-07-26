@@ -6,6 +6,7 @@ import {
   computeFingerprint,
   parseUserId,
   formatFingerprint,
+  sign,
   type Identity,
 } from '@chat2chat/crypto/browser';
 import { isCapacitor, isDesktopShell, isNativeMobile, isIosCapacitor } from '../lib/platform';
@@ -778,7 +779,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const version = vaultVersionRef.current + 1;
     vaultVersionRef.current = version;
     try {
-      await uploadUserVault(id.userId, mnemonic, { version, exportBlocks });
+      await uploadUserVault(id, mnemonic, { version, exportBlocks });
     } catch {
       /* offline */
     }
@@ -789,7 +790,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!id) return;
     const mnemonic = id.mnemonic ?? (await loadIdentityMnemonic());
     if (!mnemonic) return;
-    const remote = await fetchUserVault(id.userId, mnemonic);
+    const remote = await fetchUserVault(id, mnemonic);
     if (!remote?.exportBlocks) return;
     vaultVersionRef.current = Math.max(vaultVersionRef.current, remote.version);
     setContacts((prev) => {
@@ -1194,6 +1195,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       userId: id.userId,
       appVersion: clientInfo?.version,
       appBuild: clientInfo?.build,
+      signData: (data) => sign(id, data),
       autoAck: false,
       reconnect: true,
       onConnectingChange: (active) => setConnecting(active),
@@ -1296,15 +1298,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
           await transport.ackDelivery(env.messageId);
           if (isViewingContact(parsed.groupId)) {
-            const group = groupsRef.current.find((g) => g.id === parsed.groupId);
-            if (group) {
-              transport.sendViewAck({
-                messageId: env.messageId,
-                groupId: parsed.groupId,
-                memberCount: group.memberIds.length,
-                policy: group.deletePolicy,
-              });
-            }
+            transport.sendViewAck({ messageId: env.messageId });
           }
           return;
         }
@@ -1545,15 +1539,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             });
           }
           if (groupId && isGroupId(groupId) && isViewingContact(groupId)) {
-            const group = groupsRef.current.find((g) => g.id === groupId);
-            if (group) {
-              transport.sendViewAck({
-                messageId: env.messageId,
-                groupId,
-                memberCount: group.memberIds.length,
-                policy: group.deletePolicy,
-              });
-            }
+            transport.sendViewAck({ messageId: env.messageId });
           }
         } catch (e) {
           processedEnvelopeIdsRef.current.delete(env.messageId);
@@ -1565,6 +1551,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       transport,
       userId: id.userId,
       httpBaseUrl: httpBase,
+      signData: (data) => sign(id, data),
       getClientInfo: () => clientVersionRef.current,
     });
     transport
@@ -2511,16 +2498,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [fanOutControl, identity],
   );
 
-  const markGroupMessageViewed = useCallback((groupId: string, messageId: string) => {
-    const group = groupsRef.current.find((g) => g.id === groupId);
+  const markGroupMessageViewed = useCallback((_groupId: string, messageId: string) => {
     const transport = transportRef.current;
-    if (!group || !transport?.isConnected()) return;
-    transport.sendViewAck({
-      messageId,
-      groupId,
-      memberCount: group.memberIds.length,
-      policy: group.deletePolicy,
-    });
+    if (!transport?.isConnected()) return;
+    transport.sendViewAck({ messageId });
   }, []);
 
   const markEphemeralClosed = useCallback(
@@ -2631,11 +2612,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       } else {
         const transport = await ensureTransportReady();
         if (transport?.isConnected()) {
+          const groupMeta = {
+            memberIds: group.memberIds,
+            deletePolicy: group.deletePolicy,
+          };
           for (const memberId of group.memberIds) {
             if (memberId === id.userId) continue;
-            const memberMessageId = randomId();
             const wire = await encryptOutgoingMessage(memberId, bytes);
-            transport.sendRaw(memberId, memberMessageId, wire);
+            transport.sendRaw(memberId, messageId, wire, groupMeta);
           }
           delivered = true;
         }
@@ -3011,15 +2995,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       let meta;
       if (group) {
-        let first = true;
+        const groupMeta = {
+          memberIds: group.memberIds,
+          deletePolicy: group.deletePolicy,
+        };
         for (const memberId of group.memberIds) {
           if (memberId === id.userId) continue;
           meta = await media.send({
             recipientId: memberId,
             ...sendParams,
-            messageId: first ? messageId : randomId(),
+            groupMeta,
           });
-          first = false;
         }
         if (!meta) throw new Error('No group members to send to');
       } else {
@@ -3126,10 +3112,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             replyTo: msg.replyTo,
           },
         );
+        const groupMeta = {
+          memberIds: group.memberIds,
+          deletePolicy: group.deletePolicy,
+        };
         for (const memberId of group.memberIds) {
           if (memberId === id.userId) continue;
           const wire = await encryptOutgoingMessage(memberId, bytes);
-          transport.sendRaw(memberId, randomId(), wire);
+          transport.sendRaw(memberId, msg.id, wire, groupMeta);
         }
       } else {
         const payload = encodePayload(
@@ -3199,15 +3189,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         let meta;
         if (group) {
-          let first = true;
+          const groupMeta = {
+            memberIds: group.memberIds,
+            deletePolicy: group.deletePolicy,
+          };
           for (const memberId of group.memberIds) {
             if (memberId === id.userId) continue;
             meta = await media.send({
               recipientId: memberId,
               ...sendParams,
-              messageId: first ? msg.id : randomId(),
+              groupMeta,
             });
-            first = false;
           }
           if (!meta) throw new Error('Send failed');
         } else {

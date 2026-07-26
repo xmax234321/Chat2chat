@@ -6,16 +6,19 @@ import {
   encodeWire,
   type BlobAckPayload,
   type DeliveryAckPayload,
+  type GroupEnvelopeMeta,
   type RegisterAckPayload,
+  type RegisterChallengePayload,
   type SealedEnvelope,
   type ViewAckPayload,
   type WireMessage,
 } from '@chat2chat/protocol';
-import { padToBucket, unpadFromBucket } from '@chat2chat/crypto/browser';
+import { base64UrlDecode, base64UrlEncode, padToBucket, unpadFromBucket } from '@chat2chat/crypto/browser';
 
 export interface BrowserTransportOptions {
   serverUrl: string;
   userId: string;
+  signData?: (data: Uint8Array) => Uint8Array;
   appVersion?: string;
   appBuild?: string;
   onMessage?: (envelope: SealedEnvelope, plaintext: Uint8Array) => void | Promise<void>;
@@ -172,6 +175,27 @@ export class BrowserTransport {
     onFailed?: (error: Error) => void,
   ): void {
     switch (msg.type) {
+      case 'register_challenge': {
+        const payload = msg.payload as RegisterChallengePayload;
+        if (!this.options.signData) {
+          const err = new Error('Missing signing identity for relay registration');
+          this.options.onConnectingChange?.(false);
+          this.options.onError?.(err);
+          onFailed?.(err);
+          break;
+        }
+        const signature = this.options.signData(base64UrlDecode(payload.challenge));
+        this.send({
+          v: 1,
+          type: 'register_verify',
+          payload: {
+            userId: this.options.userId,
+            challenge: payload.challenge,
+            signature: base64UrlEncode(signature),
+          },
+        });
+        break;
+      }
       case 'register_ack': {
         const ack = msg.payload as RegisterAckPayload;
         if (!ack.ok) {
@@ -231,14 +255,25 @@ export class BrowserTransport {
     if (this.options.autoAck) await this.ackDelivery(envelope.messageId);
   }
 
-  sendRaw(recipientId: string, messageId: string, padded: Uint8Array): void {
+  sendRaw(
+    recipientId: string,
+    messageId: string,
+    padded: Uint8Array,
+    groupMeta?: GroupEnvelopeMeta,
+  ): void {
     if (!this.ws || !this.connected) throw new Error('Not connected');
     const envelope = createEnvelope({ recipientId, messageId, paddedCiphertext: padded });
+    if (groupMeta) envelope.groupMeta = groupMeta;
     this.send({ v: 1, type: 'envelope', payload: envelope });
   }
 
-  sendPlaintext(recipientId: string, messageId: string, plaintext: Uint8Array): void {
-    this.sendRaw(recipientId, messageId, padToBucket(plaintext));
+  sendPlaintext(
+    recipientId: string,
+    messageId: string,
+    plaintext: Uint8Array,
+    groupMeta?: GroupEnvelopeMeta,
+  ): void {
+    this.sendRaw(recipientId, messageId, padToBucket(plaintext), groupMeta);
   }
 
   sendBlobAck(blobId: string): void {

@@ -5,6 +5,8 @@ export const MESSAGE_BUCKET_SIZE = 512;
 
 export type WireMessageType =
   | 'register'
+  | 'register_challenge'
+  | 'register_verify'
   | 'register_ack'
   | 'envelope'
   | 'group_envelope'
@@ -51,6 +53,13 @@ export interface SealedEnvelope {
   ciphertext: string;
   /** Optional sealed sender auth tag */
   senderToken?: string;
+  /**
+   * Only meaningful on the first envelope the server sees for a given
+   * messageId — the server trusts it because it arrives over the
+   * authenticated WS connection of the sender, and uses it (not whatever
+   * a later view_ack claims) to decide when a group message can be purged.
+   */
+  groupMeta?: GroupEnvelopeMeta;
 }
 
 export interface RegisterPayload {
@@ -61,6 +70,19 @@ export interface RegisterPayload {
   appVersion?: string;
   /** Client build number (e.g. 50) */
   appBuild?: string;
+}
+
+/** Server -> client: sign this nonce to prove ownership of userId. */
+export interface RegisterChallengePayload {
+  challenge: string; // base64url, 32 random bytes
+  expiresAt: number;
+}
+
+/** Client -> server: Ed25519 signature over the challenge bytes. */
+export interface RegisterVerifyPayload {
+  userId: string;
+  challenge: string; // echoed back, must match the one the server issued
+  signature: string; // base64url
 }
 
 export interface RegisterAckPayload {

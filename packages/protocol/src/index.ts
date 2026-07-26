@@ -13,6 +13,8 @@ export type {
   WireMessageType,
   SealedEnvelope,
   RegisterPayload,
+  RegisterChallengePayload,
+  RegisterVerifyPayload,
   RegisterAckPayload,
   DeliveryAckPayload,
   ViewAckPayload,

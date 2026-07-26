@@ -45,28 +45,28 @@
       ],
       "versions": [
         {
-          "version": "1.5.2",
-          "buildVersion": "54",
-          "date": "2026-07-06",
-          "localizedDescription": "Auto-save backups and login files to Files (Backups folder). Entry animation on launch. Toast fixes and smoother recover-from-backup flow.",
-          "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.5.2-build54.ipa",
-          "size": 2392525,
-          "sha256": "ea01947e44efcb2f1c2915a3523658b9a6e8704fc759bac3aa71e709815f4788",
+          "version": "1.5.3",
+          "buildVersion": "57",
+          "date": "2026-07-26",
+          "localizedDescription": "Security release: WS challenge auth, signed blob/vault access, trusted group metadata, relay RAM→disk blob tiering. Required update — older builds are blocked.",
+          "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.5.3-build57.ipa",
+          "size": 2583666,
+          "sha256": "02fee4549fd105d8286e036aec7dd969694285cab5de409935d4b93d870d6556",
           "minOSVersion": "14.0"
         }
       ],
-      "version": "1.5.2",
-      "versionDate": "2026-07-06",
-      "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.5.2-build54.ipa",
-      "size": 2392525
+      "version": "1.5.3",
+      "versionDate": "2026-07-26",
+      "downloadURL": "https://api.chat2chat.org/altstore/Chat2Chat-1.5.3-build57.ipa",
+      "size": 2583666
     }
   ],
   "news": [
     {
-      "title": "What's new in Chat2Chat 1.5.2",
-      "identifier": "chat2chat-1.5.2-build54",
-      "caption": "Auto-save backups and login files to Files (Backups folder). Entry animation on launch. Toast fixes and smoother recover-from-backup flow.",
-      "date": "2026-07-06",
+      "title": "What's new in Chat2Chat 1.5.3",
+      "identifier": "chat2chat-1.5.3-build57",
+      "caption": "Security release: WS challenge auth, signed blob/vault access, trusted group metadata, relay RAM→disk blob tiering. Required update — older builds are blocked.",
+      "date": "2026-07-26",
       "tintColor": "E8A98F",
       "notify": true,
       "url": "https://chat2chat.org/download/versions/",

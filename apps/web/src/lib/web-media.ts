@@ -5,12 +5,14 @@ import {
   unpadFromBucket,
   base64UrlEncode,
   base64UrlDecode,
+  utf8ToBytes,
 } from '@chat2chat/crypto/browser';
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import {
   ATTACHMENT_META_BUCKET,
   decodeContent,
   type AttachmentContent,
+  type GroupEnvelopeMeta,
   type MessageContent,
 } from '@chat2chat/protocol';
 import type { BrowserTransport } from './transport';
@@ -21,6 +23,7 @@ export interface WebMediaOptions {
   transport: BrowserTransport;
   userId: string;
   httpBaseUrl: string;
+  signData?: (data: Uint8Array) => Uint8Array;
   getClientInfo?: () => { version: string; build: string } | null;
 }
 
@@ -79,6 +82,7 @@ export class WebMedia {
     mediaGroupIndex?: number;
     mediaGroupTotal?: number;
     caption?: string;
+    groupMeta?: GroupEnvelopeMeta;
     onPhase?: (phase: 'encrypt' | 'upload', percent: number) => void;
   }): Promise<AttachmentContent> {
     if (!isAllowedMediaMime(params.mime)) throw new Error(`Unsupported: ${params.mime}`);
@@ -119,7 +123,12 @@ export class WebMedia {
       ...(clientInfo ? { appVersion: clientInfo.version, appBuild: clientInfo.build } : {}),
     });
     const padded = padToBucket(new TextEncoder().encode(meta), ATTACHMENT_META_BUCKET);
-    this.options.transport.sendRaw(params.recipientId, params.messageId, padded);
+    this.options.transport.sendRaw(
+      params.recipientId,
+      params.messageId,
+      padded,
+      params.groupMeta,
+    );
     return content;
   }
 
@@ -202,10 +211,17 @@ export class WebMedia {
     data: Uint8Array,
     onProgress?: (loaded: number, total: number) => void,
   ): Promise<void> {
+    if (!this.options.signData) throw new Error('Missing signing identity for blob upload');
     const url = this.blobUrl(blobId);
+    const timestamp = Date.now();
+    const message = `blob-put:${blobId}:${recipientId}:${timestamp}`;
+    const signature = base64UrlEncode(this.options.signData(utf8ToBytes(message)));
     const headers: Record<string, string> = {
       'Content-Type': 'application/octet-stream',
       'X-Recipient-Id': recipientId,
+      'X-Sender-Id': this.options.userId,
+      'X-Timestamp': String(timestamp),
+      'X-Signature': signature,
     };
 
     if (Capacitor.isNativePlatform()) {
@@ -288,8 +304,16 @@ export class WebMedia {
   }
 
   private async download(blobId: string): Promise<Uint8Array> {
+    if (!this.options.signData) throw new Error('Missing signing identity for blob download');
     const url = this.blobUrl(blobId);
-    const headers = { 'X-User-Id': this.options.userId };
+    const timestamp = Date.now();
+    const message = `blob-get:${blobId}:${timestamp}`;
+    const signature = base64UrlEncode(this.options.signData(utf8ToBytes(message)));
+    const headers = {
+      'X-User-Id': this.options.userId,
+      'X-Timestamp': String(timestamp),
+      'X-Signature': signature,
+    };
 
     for (let attempt = 0; attempt < 8; attempt++) {
       try {

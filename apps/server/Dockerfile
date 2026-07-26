@@ -7,17 +7,20 @@ FROM base AS deps
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY apps/server/package.json ./apps/server/
 COPY packages/protocol/package.json ./packages/protocol/
-RUN pnpm install --frozen-lockfile --filter @chat2chat/server...
+COPY packages/crypto/package.json ./packages/crypto/
+RUN pnpm install --frozen-lockfile --filter @chat2chat/server... --ignore-scripts
 
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/server/node_modules ./apps/server/node_modules
 COPY --from=deps /app/packages/protocol/node_modules ./packages/protocol/node_modules
+COPY --from=deps /app/packages/crypto/node_modules ./packages/crypto/node_modules
 COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/protocol ./packages/protocol
+COPY packages/crypto ./packages/crypto
 COPY apps/server ./apps/server
-RUN pnpm --filter @chat2chat/protocol build && pnpm --filter @chat2chat/server build
-RUN pnpm deploy --filter @chat2chat/server --prod /out
+RUN pnpm --filter @chat2chat/protocol build && pnpm --filter @chat2chat/crypto build && pnpm --filter @chat2chat/server build
+RUN pnpm deploy --filter @chat2chat/server --prod /out --config.ignore-scripts=true
 
 FROM node:22-alpine AS runner
 RUN apk add --no-cache wget

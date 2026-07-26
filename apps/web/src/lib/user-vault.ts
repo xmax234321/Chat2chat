@@ -1,7 +1,12 @@
-import { encryptWithPassword, decryptWithPassword, base64UrlEncode, base64UrlDecode } from '@chat2chat/crypto/browser';
-import { hmac } from '@noble/hashes/hmac';
-import { sha256 } from '@noble/hashes/sha2';
-import { utf8ToBytes } from '@noble/hashes/utils';
+import {
+  encryptWithPassword,
+  decryptWithPassword,
+  base64UrlEncode,
+  base64UrlDecode,
+  sign,
+  utf8ToBytes,
+  type Identity,
+} from '@chat2chat/crypto/browser';
 import { pickRelayUrls, preferredRelayEndpoints } from './server-url';
 
 export type UserVaultPlaintext = {
@@ -10,11 +15,6 @@ export type UserVaultPlaintext = {
 };
 
 const VAULT_SCOPE = 'chat2chat-user-vault-v1';
-
-export function buildVaultAuthToken(mnemonic: string, userId: string): string {
-  const key = sha256(utf8ToBytes(`${mnemonic.trim().toLowerCase()}:${VAULT_SCOPE}`));
-  return base64UrlEncode(hmac(sha256, key, utf8ToBytes(userId)));
-}
 
 export function encryptUserVault(mnemonic: string, payload: UserVaultPlaintext): string {
   const bytes = utf8ToBytes(JSON.stringify(payload));
@@ -46,14 +46,25 @@ export function decryptUserVault(mnemonic: string, packedB64: string): UserVault
   }
 }
 
+function vaultApiBase(http: string): string {
+  const base = http.replace(/\/$/, '');
+  return `${base}/api/v1/vault`;
+}
+
 export async function fetchUserVault(
-  userId: string,
+  identity: Identity,
   mnemonic: string,
   relay = preferredRelayEndpoints(),
 ): Promise<UserVaultPlaintext | null> {
   const endpoints = await pickRelayUrls(relay);
-  const auth = buildVaultAuthToken(mnemonic, userId);
-  const res = await fetch(`${endpoints.http}/vault/${encodeURIComponent(userId)}?auth=${encodeURIComponent(auth)}`);
+  const userId = identity.userId;
+  const timestamp = Date.now();
+  const message = `vault-get:${userId}:${timestamp}`;
+  const signature = base64UrlEncode(sign(identity, utf8ToBytes(message)));
+  const url = new URL(`${vaultApiBase(endpoints.http)}/${encodeURIComponent(userId)}`);
+  url.searchParams.set('timestamp', String(timestamp));
+  url.searchParams.set('signature', signature);
+  const res = await fetch(url);
   if (res.status === 404) return null;
   if (!res.ok) return null;
   const body = (await res.json()) as { ciphertext?: string };
@@ -62,18 +73,21 @@ export async function fetchUserVault(
 }
 
 export async function uploadUserVault(
-  userId: string,
+  identity: Identity,
   mnemonic: string,
   payload: UserVaultPlaintext,
   relay = preferredRelayEndpoints(),
 ): Promise<void> {
   const endpoints = await pickRelayUrls(relay);
-  const auth = buildVaultAuthToken(mnemonic, userId);
+  const userId = identity.userId;
   const ciphertext = encryptUserVault(mnemonic, payload);
-  const res = await fetch(`${endpoints.http}/vault/${encodeURIComponent(userId)}`, {
+  const timestamp = Date.now();
+  const message = `vault-put:${userId}:${payload.version}:${timestamp}:${ciphertext}`;
+  const signature = base64UrlEncode(sign(identity, utf8ToBytes(message)));
+  const res = await fetch(`${vaultApiBase(endpoints.http)}/${encodeURIComponent(userId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ auth, ciphertext, version: payload.version }),
+    body: JSON.stringify({ ciphertext, version: payload.version, timestamp, signature }),
   });
   if (!res.ok) {
     throw new Error('Vault sync failed');

@@ -34,11 +34,14 @@ services:
     environment:
       PORT: 3847
       HOST: 0.0.0.0
-      CORS_ORIGIN: ${CORS_ORIGIN:-true}
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://chat2chat.org,https://app.chat2chat.org,capacitor://localhost}
       MESSAGE_TTL_MS: ${MESSAGE_TTL_MS:-86400000}
       BLOB_TTL_MS: ${BLOB_TTL_MS:-86400000}
-      MAX_BLOB_SIZE: ${MAX_BLOB_SIZE:-536870912}
+      MAX_BLOB_SIZE: ${MAX_BLOB_SIZE:-104857600}
+      BLOB_MEMORY_TTL_MS: ${BLOB_MEMORY_TTL_MS:-720000}
+      BLOB_MEMORY_BUDGET_MB: ${BLOB_MEMORY_BUDGET_MB:-256}
       DATA_DIR: /app/data
+      BLOBS_DIR: /app/data/blobs
       SMTP_HOST: ${SMTP_HOST:-smtp.mail.ru}
       SMTP_PORT: ${SMTP_PORT:-465}
       SMTP_SECURE: ${SMTP_SECURE:-true}
@@ -48,8 +51,8 @@ services:
       SITE_URL: https://${SITE_DOMAIN:-chat2chat.org}
       API_PUBLIC_URL: https://${DOMAIN}
       DEV_BUILDS_DIR: /app/dev-ipas
-      MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-1.4.2}
-      MIN_CLIENT_BUILD: ${MIN_CLIENT_BUILD:-50}
+      MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-1.5.3}
+      MIN_CLIENT_BUILD: ${MIN_CLIENT_BUILD:-57}
       ENFORCE_MIN_CLIENT_VERSION: ${ENFORCE_MIN_CLIENT_VERSION:-true}
     volumes:
       - relay_data:/app/data
