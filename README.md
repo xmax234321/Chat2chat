@@ -1,6 +1,7 @@
 # Chat2Chat
 
 site: chat2chat.org
+all versions: https://chat2chat.org/download/versions/
 
 Приватный мессенджер: сервер не хранит переписку, E2E-шифрование, телефон — источник истины.
 
