@@ -23,4 +23,7 @@ else
   echo "  (skip) нет IPA — запусти pnpm ios:altstore"
 fi
 
-echo "==> Готово: downloads/, altstore/"
+echo "==> Versions page → deploy/landing/download/versions/"
+node "$REPO_ROOT/deploy/scripts/generate-versions-page.mjs"
+
+echo "==> Готово: downloads/, altstore/, versions/"

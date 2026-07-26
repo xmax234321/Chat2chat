@@ -1,4 +1,76 @@
-<!DOCTYPE html>
+#!/usr/bin/env node
+/**
+ * Generate deploy/landing/download/versions/index.html from versions.manifest.json.
+ */
+import { readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(__dirname, '../..');
+const MANIFEST_PATH = join(ROOT, 'deploy/altstore/versions.manifest.json');
+const ALTSTORE_DIR = join(ROOT, 'deploy/altstore');
+const OUT_PATH = join(ROOT, 'deploy/landing/download/versions/index.html');
+const ALTSTORE_BASE = 'https://api.chat2chat.org/altstore';
+
+function formatSize(bytes) {
+  if (!bytes) return '';
+  const mb = bytes / (1024 * 1024);
+  return `~${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
+
+function ipaSize(ipaFile) {
+  const path = join(ALTSTORE_DIR, ipaFile);
+  if (!existsSync(path)) return 0;
+  return statSync(path).size;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderPublicRow(entry, isLatest) {
+  const size = formatSize(ipaSize(entry.ipaFile));
+  const meta = [`build ${entry.buildVersion}`, entry.date, size].filter(Boolean).join(' · ');
+  const rowClass = isLatest ? 'row latest' : 'row';
+  const tag = isLatest
+    ? '<span class="tag">LATEST</span>'
+    : entry.deprecated
+      ? '<span class="tag" style="background:#5F5F5D">DEPRECATED</span>'
+      : '';
+  const downloadUrl = `${ALTSTORE_BASE}/${entry.ipaFile}`;
+  const buttons = isLatest
+    ? `<div style="display:flex;flex-direction:column;gap:8px">
+        <a class="btn" href="${downloadUrl}">Download IPA</a>
+        <a class="btn btn-g" href="${ALTSTORE_BASE}/Chat2Chat-latest.ipa">Latest alias</a>
+      </div>`
+    : `<a class="btn btn-g" href="${downloadUrl}">Download IPA</a>`;
+
+  return `    <article class="${rowClass}">
+      <div>
+        ${tag}
+        <p class="ver">Chat2Chat ${escapeHtml(entry.version)}</p>
+        <p class="meta mono">${escapeHtml(meta)}</p>
+        <p class="desc">${escapeHtml(entry.description)}</p>
+      </div>
+      ${buttons}
+    </article>`;
+}
+
+const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'));
+const publicVersions = manifest.versions
+  .filter((v) => (v.channel ?? 'public') === 'public')
+  .sort((a, b) => Number(b.buildVersion) - Number(a.buildVersion));
+
+const publicHtml = publicVersions
+  .map((entry, index) => renderPublicRow(entry, index === 0))
+  .join('\n\n');
+
+const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -70,88 +142,7 @@ h1{font-size:36px;font-weight:600;margin:0 0 16px;letter-spacing:-.03em}
   <p class="lead" id="lead">Install Chat2Chat from AltStore — add the source below and tap Update in Browse.</p>
 
   <div class="list" id="public-versions" role="tabpanel" aria-labelledby="tab-public">
-    <article class="row latest">
-      <div>
-        <span class="tag">LATEST</span>
-        <p class="ver">Chat2Chat 1.5.3</p>
-        <p class="meta mono">build 57 · 2026-07-26 · ~2.5 MB</p>
-        <p class="desc">Security release: WS challenge auth, signed blob/vault access, trusted group metadata, relay RAM→disk blob tiering. Required update — older builds are blocked.</p>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <a class="btn" href="https://api.chat2chat.org/altstore/Chat2Chat-1.5.3-build57.ipa">Download IPA</a>
-        <a class="btn btn-g" href="https://api.chat2chat.org/altstore/Chat2Chat-latest.ipa">Latest alias</a>
-      </div>
-    </article>
-
-    <article class="row">
-      <div>
-        <span class="tag" style="background:#5F5F5D">DEPRECATED</span>
-        <p class="ver">Chat2Chat 1.5.2</p>
-        <p class="meta mono">build 56 · 2026-07-26 · ~2.5 MB</p>
-        <p class="desc">Messenger polish: reliable button taps, multi-video album sends, stable reconnects, voice messages, delivery ticks, and encrypted server vault for export block.</p>
-      </div>
-      <a class="btn btn-g" href="https://api.chat2chat.org/altstore/Chat2Chat-1.5.2-build56.ipa">Download IPA</a>
-    </article>
-
-    <article class="row">
-      <div>
-        <span class="tag" style="background:#5F5F5D">DEPRECATED</span>
-        <p class="ver">Chat2Chat 1.5.2</p>
-        <p class="meta mono">build 54 · 2026-07-06 · ~2.3 MB</p>
-        <p class="desc">Auto-save backups and login files to Files (Backups folder). Entry animation on launch. Toast fixes and smoother recover-from-backup flow.</p>
-      </div>
-      <a class="btn btn-g" href="https://api.chat2chat.org/altstore/Chat2Chat-1.5.2-build54.ipa">Download IPA</a>
-    </article>
-
-    <article class="row">
-      <div>
-        <span class="tag" style="background:#5F5F5D">DEPRECATED</span>
-        <p class="ver">Chat2Chat 1.5.1</p>
-        <p class="meta mono">build 53 · 2026-07-06 · ~2.3 MB</p>
-        <p class="desc">Auto-save backups and login files to Files (Backups folder). No manual share sheet.</p>
-      </div>
-      <a class="btn btn-g" href="https://api.chat2chat.org/altstore/Chat2Chat-1.5.1-build53.ipa">Download IPA</a>
-    </article>
-
-    <article class="row">
-      <div>
-        <span class="tag" style="background:#5F5F5D">DEPRECATED</span>
-        <p class="ver">Chat2Chat 1.5</p>
-        <p class="meta mono">build 52 · 2026-07-06 · ~2.3 MB</p>
-        <p class="desc">Security release: Keychain + encrypted IndexedDB, TLS-only relay, ChainLock/FastFile encryption, Face ID gates data unlock, AltStore SHA256 manifests.</p>
-      </div>
-      <a class="btn btn-g" href="https://api.chat2chat.org/altstore/Chat2Chat-1.5-build52.ipa">Download IPA</a>
-    </article>
-
-    <article class="row">
-      <div>
-        <span class="tag" style="background:#5F5F5D">DEPRECATED</span>
-        <p class="ver">Chat2Chat 1.4.2</p>
-        <p class="meta mono">build 51 · 2026-07-06</p>
-        <p class="desc">Superseded by 1.5 — update required for latest security baseline.</p>
-      </div>
-      <a class="btn btn-g" href="https://api.chat2chat.org/altstore/Chat2Chat-1.4.2-build51.ipa">Download IPA</a>
-    </article>
-
-    <article class="row">
-      <div>
-        <span class="tag" style="background:#5F5F5D">DEPRECATED</span>
-        <p class="ver">Chat2Chat 1.4.2</p>
-        <p class="meta mono">build 50 · 2026-07-06</p>
-        <p class="desc">Deprecated — blocked by relay.</p>
-      </div>
-      <a class="btn btn-g" href="https://api.chat2chat.org/altstore/Chat2Chat-1.4.2-build50.ipa">Download IPA</a>
-    </article>
-
-    <article class="row">
-      <div>
-        <span class="tag" style="background:#5F5F5D">DEPRECATED</span>
-        <p class="ver">Chat2Chat 1.4.1</p>
-        <p class="meta mono">build 49 · 2026-07-04 · ~2.3 MB</p>
-        <p class="desc">Deprecated — blocked by relay.</p>
-      </div>
-      <a class="btn btn-g" href="https://api.chat2chat.org/altstore/Chat2Chat-1.4.1-build49.ipa">Download IPA</a>
-    </article>
+${publicHtml}
   </div>
 
   <div class="list" id="developer-versions" role="tabpanel" aria-labelledby="tab-developer" hidden>
@@ -265,7 +256,7 @@ h1{font-size:36px;font-weight:600;margin:0 0 16px;letter-spacing:-.03em}
     </article>
   </div>
 
-  <p class="hint" id="hint">AltStore source lists <strong>public</strong> releases only: <code class="mono">https://api.chat2chat.org/altstore/source.json</code>. Minimum supported: <strong>1.5.3 build 57</strong>. Refresh apps every 7 days on the same Wi‑Fi as AltServer.</p>
+  <p class="hint" id="hint">AltStore source lists <strong>public</strong> releases only: <code class="mono">https://api.chat2chat.org/altstore/source.json</code>. Minimum supported: <strong>${escapeHtml(manifest.minSupported.version)} build ${escapeHtml(manifest.minSupported.buildVersion)}</strong>. Refresh apps every 7 days on the same Wi‑Fi as AltServer.</p>
 </div>
 
 <div class="modal" id="dev-modal" hidden>
@@ -290,7 +281,7 @@ h1{font-size:36px;font-weight:600;margin:0 0 16px;letter-spacing:-.03em}
   var tabs = toggle.querySelectorAll('button[role="tab"]');
   var leads = {
     public: 'Install Chat2Chat from AltStore — add the source below and tap Update in Browse.',
-    developer: 'Developer builds require email verification — enter your address and we\'ll send a one-time download link.'
+    developer: 'Developer builds require email verification — enter your address and we\\'ll send a one-time download link.'
   };
 
   var API_BASE = location.hostname === 'localhost' ? 'http://localhost:3847' : 'https://api.chat2chat.org';
@@ -386,3 +377,7 @@ h1{font-size:36px;font-weight:600;margin:0 0 16px;letter-spacing:-.03em}
 </script>
 </body>
 </html>
+`;
+
+writeFileSync(OUT_PATH, html);
+console.log(`Wrote ${OUT_PATH} (${publicVersions.length} public versions, latest ${manifest.latest})`);

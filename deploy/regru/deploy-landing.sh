@@ -135,6 +135,7 @@ bash "$REPO_ROOT/deploy/scripts/build-site-release.sh"
 
 if [[ -f "$REPO_ROOT/deploy/altstore/versions.manifest.json" ]]; then
   node "$REPO_ROOT/apps/mobile/scripts/generate-altstore-source.mjs" 2>/dev/null || true
+  node "$REPO_ROOT/deploy/scripts/generate-versions-page.mjs" 2>/dev/null || true
 fi
 
 echo "==> DNS: $SITE_DOMAIN → $(dig +short "$SITE_DOMAIN" A | tail -1) (VPS $VPS_HOST)"
