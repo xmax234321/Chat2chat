@@ -1,9 +1,8 @@
 /**
  * CLI demo: text + photo + video via separate blob channel.
  *
- * Usage:
- *   1. Start server: pnpm dev:server
- *   2. Run demo:     pnpm demo
+ * Usage: pnpm demo
+ * Relay: CHAT2CHAT_SERVER (default wss://api.chat2chat.org/ws)
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -14,7 +13,7 @@ import { encodeContent } from '@chat2chat/protocol';
 import { EncryptedStore } from '@chat2chat/storage';
 import { TransportClient, MediaClient, httpBaseFromWsUrl } from '@chat2chat/transport';
 
-const SERVER_URL = process.env.CHAT2CHAT_SERVER ?? 'ws://localhost:3847/ws';
+const SERVER_URL = process.env.CHAT2CHAT_SERVER ?? 'wss://api.chat2chat.org/ws';
 const HTTP_BASE = httpBaseFromWsUrl(SERVER_URL);
 
 /** Minimal valid 1x1 PNG */

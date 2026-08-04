@@ -5,15 +5,20 @@ dist
 .DS_Store
 coverage
 .turbo
-apps/server/data
-deploy/regru/.env
 apps/mobile/build
 apps/mobile/releases/**/*.ipa
 apps/mobile/*.zip
-deploy/landing/app
-deploy/landing/downloads
 deploy/altstore/*.ipa
 deploy/altstore/Chat2Chat-*.ipa
 apps/desktop/release
 apps/desktop/dist
 *.tsbuildinfo
+
+# Server / private deploy (kept locally, not in public repo)
+apps/server/
+deploy/regru/
+deploy/landing/
+deploy/scripts/
+docker-compose.yml
+docs/DEPLOY_REGRU.md
+apps/web/Dockerfile

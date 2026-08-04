@@ -13,14 +13,12 @@
 ## Запуск
 
 ```bash
-# Терминал 1 — relay
-pnpm dev:server
-
-# Терминал 2 — UI
 pnpm dev:web
 ```
 
 Открой http://localhost:5173
+
+По умолчанию клиент использует production relay (`https://api.chat2chat.org`). Для другого relay в dev задайте `VITE_CHAT2CHAT_DEV_RELAY_HTTP` и `VITE_CHAT2CHAT_DEV_RELAY_WS` в `apps/web/.env.development`.
 
 ## Стек
 

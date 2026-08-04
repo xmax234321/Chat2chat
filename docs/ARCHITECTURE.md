@@ -6,32 +6,34 @@
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| Framework | **React Native + Expo** | QR scanning, deep links (`chat2chat://`), Bluetooth LE (expo-bluetooth / react-native-ble-plx), single codebase for iOS/Android |
-| Language | **TypeScript** | Shared types with desktop and server |
+| Framework | **React Native + Capacitor** | Shared web UI in native shells, QR, deep links (`chat2chat://`) |
+| Language | **TypeScript** | Shared types with desktop and packages |
 | E2E crypto | **libsignal-client** (via `@signalapp/libsignal-client` native bindings) | Audited Double Ratchet + X3DH |
 | Identity / seed | **`@chat2chat/crypto`** (shared) | BIP39 + Ed25519/X25519 via `@scure/bip39`, `@noble/curves` |
 | Local storage | **SQLCipher** via `op-sqlite` or `react-native-quick-sqlite` + app-layer AES | Encrypted at rest, Keychain/Keystore for DB key |
 | Secure storage | **expo-secure-store** / Keychain / Android Keystore | Ratchet session state never in plaintext |
-| Transport | **`@chat2chat/transport`** over WebSocket | Same protocol as desktop |
+| Transport | **`@chat2chat/transport`** over WebSocket | Shared protocol with desktop and web |
+
+### Web client
+
+| Layer | Choice |
+|-------|--------|
+| UI | **React + Vite + React Router** |
+| Crypto / protocol / transport | Same `@chat2chat/*` packages (browser entry where needed) |
+| Relay | Production `https://api.chat2chat.org` / `wss://api.chat2chat.org/ws`; optional dev overrides via env |
 
 ### Desktop (secondary client)
 
 | Layer | Choice | Rationale |
 |-------|--------|-----------|
-| Shell | **Tauri 2** (Rust shell + WebView) | Smaller attack surface than Electron; native Bluetooth on pairing |
-| UI | **React + TypeScript** | Reuse components and shared packages |
+| Shell | **Electron** (macOS) | Reuse web UI; native packaging |
+| UI | **React + TypeScript** | Shared with web and mobile shells |
 | E2E / storage / transport | Same shared packages as mobile | One crypto implementation |
-| Pairing | QR login + initial **Bluetooth** key transfer (Tauri BLE plugin) | Phone is source of truth |
+| Pairing | QR login + phone as source of truth | Desktop recover / link flows |
 
-### Server (zero-storage relay)
+### Relay (external)
 
-| Layer | Choice | Rationale |
-|-------|--------|-----------|
-| Runtime | **Node.js 20+** | `@signalapp/libsignal-client` bindings, fast iteration |
-| HTTP / WS | **Fastify** + `@fastify/websocket` | Low overhead, typed plugins |
-| Ephemeral queue | **In-memory Map** (dev) → **Redis with TTL** (prod) | Messages exist only until delivery ACK |
-| File relay | Separate **S3-compatible presigned** or dedicated blob endpoint | Does not block text message queue |
-| Language | **TypeScript** | Shared protocol types with clients |
+Clients talk to the **Chat2Chat relay** over HTTPS and WebSocket. The relay queues encrypted envelopes until delivery ACK; it does not store conversation history. Relay implementation and hosting are **not** part of this repository.
 
 ### Shared core (monorepo packages)
 
@@ -44,15 +46,16 @@ packages/transport  — WebSocket client, send/receive/ACK flow
 
 ## Repository Layout
 
-**Monorepo** (pnpm workspaces) — one repo, shared TypeScript packages, separate app shells.
+**Monorepo** (pnpm workspaces) — client apps and shared TypeScript packages.
 
 ```
 chat2chat/
 ├── apps/
-│   ├── server/          # Zero-storage relay
-│   ├── mobile/          # React Native (Expo) — shell
-│   ├── desktop/         # Tauri — shell
-│   └── demo/            # CLI demo of identity + messaging
+│   ├── web/           # Web UI (also embedded in mobile)
+│   ├── mobile/        # Capacitor iOS / Android
+│   ├── desktop/       # Electron macOS
+│   ├── demo/          # CLI demo
+│   └── website/       # Marketing site source
 ├── packages/
 │   ├── crypto/
 │   ├── storage/
@@ -61,11 +64,11 @@ chat2chat/
 └── docs/
 ```
 
-## Layer Separation (§8)
+## Layer Separation
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  UI (mobile / desktop apps)                             │
+│  UI (mobile / web / desktop apps)                       │
 ├─────────────────────────────────────────────────────────┤
 │  Multi-device sync (phone ↔ desktop)     [future]     │
 ├─────────────────────────────────────────────────────────┤
@@ -77,7 +80,7 @@ chat2chat/
 └─────────────────────────────────────────────────────────┘
                           │
                           ▼
-                   Relay server (no persistence)
+              Chat2Chat relay (encrypted transit only)
 ```
 
 ## Identity Model
@@ -90,10 +93,10 @@ chat2chat/
 
 **Recovery:** seed restores keys and ID only — not message history.
 
-## Message Lifecycle (zero-storage)
+## Message Lifecycle (zero-storage on relay)
 
 ```
-Sender                    Server                     Recipient
+Sender                    Relay                      Recipient
   │ encrypt (ratchet)       │                            │
   │──── sealed envelope ───►│ store in ephemeral queue   │
   │                         │──── push via WebSocket ───►│
@@ -107,19 +110,17 @@ Sender                    Server                     Recipient
 - [x] Identity generation (seed → keys → ID → fingerprint)
 - [x] Seed confirmation flow types
 - [x] Encrypted local storage (AES-256-GCM + SQLite)
-- [x] Minimal relay server (in-memory queue, delete on ACK)
 - [x] Transport client (WebSocket connect, send, receive, ACK)
 - [x] Protocol envelopes with padding + sealed-sender fields
-- [x] Photo/video via separate HTTP blob channel (`PUT/GET /blob`, `blob_ack`)
+- [x] Photo/video via separate HTTP blob channel
 - [ ] Full libsignal Double Ratchet sessions (wrapper stubbed, integration next)
-- [ ] Mobile / desktop UI
 - [ ] Bluetooth pairing
 
-## Running
+## Running clients
 
 ```bash
 pnpm install
 pnpm build
-pnpm dev:server    # relay on :3847
-pnpm demo           # two CLI identities exchange a message
+pnpm dev:web      # browser UI (production relay by default)
+pnpm demo         # CLI identities via relay (see CHAT2CHAT_SERVER)
 ```
