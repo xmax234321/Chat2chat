@@ -22,3 +22,5 @@ deploy/scripts/
 docker-compose.yml
 docs/DEPLOY_REGRU.md
 apps/web/Dockerfile
+apps/web/nginx.conf
+.env.example
